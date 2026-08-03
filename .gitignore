@@ -1,0 +1,7 @@
+bin/
+*.csv
+*.db
+fetch.log
+.DS_Store
+.env
+/html
