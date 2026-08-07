@@ -171,6 +171,61 @@ func (s *Store) AllIDs(ctx context.Context, workspaceID string) (map[string]stru
 	return ids, rows.Err()
 }
 
+// Query 按月x模型分组统计
+func (s *Store) Query(ctx context.Context, workspaceID string) ([]struct {
+	Month, Model    string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
+       model,
+       COUNT(*),
+       SUM(cost_raw)/1e8,
+       SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
+       SUM(output_tokens),
+       SUM(reasoning_tokens)
+FROM usage_records WHERE workspace_id = ?
+GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Month, Model    string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+	}
+	for rows.Next() {
+		var r struct {
+			Month, Model    string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+		}
+		if err := rows.Scan(&r.Month, &r.Model, &r.Count, &r.CostUSD,
+			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CountAll 统计某 workspace 的记录数（写入 dest）
+func (s *Store) CountAll(ctx context.Context, workspaceID string, dest *int64) error {
+	return s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_records WHERE workspace_id = ?`, workspaceID).Scan(dest)
+}
+
 // GetLastPage 读取上次抓到的页数（断点续传）
 func (s *Store) GetLastPage(ctx context.Context, workspaceID string) (int, error) {
 	var page int

@@ -5,3 +5,4 @@ fetch.log
 .DS_Store
 .env
 /html
+/export
