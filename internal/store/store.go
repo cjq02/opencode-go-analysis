@@ -173,12 +173,15 @@ func (s *Store) AllIDs(ctx context.Context, workspaceID string) (map[string]stru
 
 // Query 按月x模型分组统计
 func (s *Store) Query(ctx context.Context, workspaceID string) ([]struct {
-	Month, Model    string
-	Count           int64
-	CostUSD         float64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
+	Month, Model     string
+	Count            int64
+	CostUSD          float64
+	InputTokens      int64
+	OutputTokens     int64
+	ReasoningTokens  int64
+	CacheRead        int64
+	CacheWrite5m     int64
+	CacheWrite1h     int64
 }, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
@@ -187,7 +190,10 @@ SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
        SUM(cost_raw)/1e8,
        SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
        SUM(output_tokens),
-       SUM(reasoning_tokens)
+       SUM(reasoning_tokens),
+       SUM(cache_read_tokens),
+       SUM(cache_write_5m),
+       SUM(cache_write_1h)
 FROM usage_records WHERE workspace_id = ?
 GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
 	if err != nil {
@@ -201,6 +207,9 @@ GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
 		InputTokens     int64
 		OutputTokens    int64
 		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
 	}
 	for rows.Next() {
 		var r struct {
@@ -210,8 +219,72 @@ GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
 			InputTokens     int64
 			OutputTokens    int64
 			ReasoningTokens int64
+			CacheRead       int64
+			CacheWrite5m    int64
+			CacheWrite1h    int64
 		}
 		if err := rows.Scan(&r.Month, &r.Model, &r.Count, &r.CostUSD,
+			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens,
+			&r.CacheRead, &r.CacheWrite5m, &r.CacheWrite1h); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QueryRow 执行单值聚合查询（agg 为 MIN/MAX 等），写入 dest
+func (s *Store) QueryRow(ctx context.Context, workspaceID, agg string, dest *int64) error {
+	return s.db.QueryRowContext(ctx,
+		`SELECT `+agg+`(time_created) FROM usage_records WHERE workspace_id = ?`, workspaceID).Scan(dest)
+}
+
+// CountAll 统计某 workspace 的记录数（写入 dest）
+func (s *Store) CountAll(ctx context.Context, workspaceID string, dest *int64) error {
+	return s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage_records WHERE workspace_id = ?`, workspaceID).Scan(dest)
+}
+
+// MonthStats 按月分组统计
+func (s *Store) MonthStats(ctx context.Context, workspaceID string) ([]struct {
+	Month           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
+       COUNT(*),
+       SUM(cost_raw)/1e8,
+       SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
+       SUM(output_tokens),
+       SUM(reasoning_tokens)
+FROM usage_records WHERE workspace_id = ?
+GROUP BY month ORDER BY month`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Month           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+	}
+	for rows.Next() {
+		var r struct {
+			Month           string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+		}
+		if err := rows.Scan(&r.Month, &r.Count, &r.CostUSD,
 			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens); err != nil {
 			return nil, err
 		}
@@ -220,10 +293,100 @@ GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
 	return out, rows.Err()
 }
 
-// CountAll 统计某 workspace 的记录数（写入 dest）
-func (s *Store) CountAll(ctx context.Context, workspaceID string, dest *int64) error {
-	return s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM usage_records WHERE workspace_id = ?`, workspaceID).Scan(dest)
+// ModelStats 按模型分组统计（调用次数降序）
+func (s *Store) ModelStats(ctx context.Context, workspaceID string) ([]struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT model,
+       COUNT(*),
+       SUM(cost_raw)/1e8,
+       SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
+       SUM(output_tokens),
+       SUM(reasoning_tokens)
+FROM usage_records WHERE workspace_id = ?
+GROUP BY model ORDER BY 2 DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Model           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+	}
+	for rows.Next() {
+		var r struct {
+			Model           string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+		}
+		if err := rows.Scan(&r.Model, &r.Count, &r.CostUSD,
+			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CacheStats 按月统计缓存读写 tokens
+func (s *Store) CacheStats(ctx context.Context, workspaceID string) ([]struct {
+	Month          string
+	Count          int64
+	InputTokens    int64
+	CacheRead      int64
+	CacheWrite5m   int64
+	CacheWrite1h   int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
+       COUNT(*),
+       SUM(input_tokens),
+       SUM(cache_read_tokens),
+       SUM(cache_write_5m),
+       SUM(cache_write_1h)
+FROM usage_records WHERE workspace_id = ?
+GROUP BY month ORDER BY month`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Month        string
+		Count        int64
+		InputTokens  int64
+		CacheRead    int64
+		CacheWrite5m int64
+		CacheWrite1h int64
+	}
+	for rows.Next() {
+		var r struct {
+			Month        string
+			Count        int64
+			InputTokens  int64
+			CacheRead    int64
+			CacheWrite5m int64
+			CacheWrite1h int64
+		}
+		if err := rows.Scan(&r.Month, &r.Count, &r.InputTokens,
+			&r.CacheRead, &r.CacheWrite5m, &r.CacheWrite1h); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetLastPage 读取上次抓到的页数（断点续传）
