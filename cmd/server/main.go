@@ -15,6 +15,9 @@ import (
 	"opencode-go-analysis/internal/store"
 )
 
+// 表格高度偏移常量：表格高度 = 100vh - TABLE_OFFSET，改这里即可（当前 280px）
+const TABLE_OFFSET = "280px"
+
 func main() {
 	var (
 		dbPath    string
@@ -123,6 +126,7 @@ func buildData(ctx context.Context, st *store.Store, ws, dailyMon, peakStart str
 		"PeakStart":       peakStart,
 		"DailyMonth":      dailyMon,
 		"AvailableMonths": availableMonths(ctx, st, ws),
+		"TableOffset":     TABLE_OFFSET,
 		"MonthRows":       monthRows,
 		"ModelRows":       modelRows,
 		"MonthModelRows":  monthModelRows,
@@ -307,11 +311,19 @@ nav button{white-space:nowrap;padding:8px 14px;border:1px solid #e5e7eb;border-r
 nav button.active{background:#111827;color:#fff;border-color:#111827}
 main{max-width:1280px;margin:0 auto;padding:16px}
 .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
-.card h2{margin:0 0 12px;font-size:15px}
+.card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.card-head h2{margin:0;font-size:15px}
+.view-switch{display:flex;gap:6px}
+.view-switch button{padding:4px 12px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px}
+.view-switch button.active{background:#111827;color:#fff;border-color:#111827}
 canvas{max-height:320px}
+.tab{display:none}.tab.active{display:block}
+.pane{display:none}.pane.active{display:block}
+.table-wrap{height:calc(100vh - {{.TableOffset}});max-height:calc(100vh - {{.TableOffset}});overflow:auto;border:1px solid #e5e7eb;border-radius:8px}
+.table-wrap table{margin:0}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:8px 10px;border-bottom:1px solid #f0f0f0;text-align:right;white-space:nowrap}
-th{position:sticky;top:0;background:#fafafa;cursor:pointer;user-select:none;text-align:right}
+th{position:sticky;top:0;background:#fafafa;cursor:pointer;user-select:none;text-align:right;z-index:1}
 th:first-child,td:first-child{text-align:left}
 tr:hover td{background:#fafafa}
 .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:11px}
@@ -332,38 +344,52 @@ tr:hover td{background:#fafafa}
 <button onclick="openTab(event,'peak')">DeepSeek 峰谷 ({{.PeakStart}}起)</button>
 </nav>
 <main>
-<div id="tab-month" class="tab active"><div class="card"><h2>按月成本与调用次数</h2><canvas id="chart-month"></canvas></div>
-<div class="card"><h2>按月统计 <span class="badge">{{.Total}} 条</span></h2>
-<table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本(USD)</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
+<div id="tab-month" class="tab active"><div class="card">
+  <div class="card-head"><h2>按月 <span class="badge">{{.Total}} 条</span></h2><div class="view-switch"><button id="btn-month-chart" onclick="switchView('month','chart')">图表</button><button id="btn-month-table" class="active" onclick="switchView('month','table')">表格</button></div></div>
+  <div id="pane-month-chart" class="pane"><canvas id="chart-month"></canvas></div>
+  <div id="pane-month-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本(USD)</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
 {{range .MonthRows}}<tr><td>{{.Month}}</td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td><td data-sort="{{.ReasoningTokens}}">{{thousands .ReasoningTokens}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-model" class="tab"><div class="card"><h2>按模型成本</h2><canvas id="chart-model"></canvas></div>
-<div class="card"><h2>按模型统计</h2>
-<table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本(USD)</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
+</div></div>
+<div id="tab-model" class="tab"><div class="card">
+  <div class="card-head"><h2>按模型</h2><div class="view-switch"><button id="btn-model-chart" onclick="switchView('model','chart')">图表</button><button id="btn-model-table" class="active" onclick="switchView('model','table')">表格</button></div></div>
+  <div id="pane-model-chart" class="pane"><canvas id="chart-model"></canvas></div>
+  <div id="pane-model-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本(USD)</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
 {{range .ModelRows}}<tr><td style="text-align:left"><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td><td data-sort="{{.ReasoningTokens}}">{{thousands .ReasoningTokens}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-monthModel" class="tab"><div class="card"><h2>按月 × 模型 <span class="badge">每亿输入tok</span></h2>
-<table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
+</div></div>
+<div id="tab-monthModel" class="tab"><div class="card">
+  <div class="card-head"><h2>按月 × 模型 <span class="badge">每亿输入tok</span></h2><div class="view-switch"><button id="btn-monthModel-chart" onclick="switchView('monthModel','chart')">图表</button><button id="btn-monthModel-table" class="active" onclick="switchView('monthModel','table')">表格</button></div></div>
+  <div id="pane-monthModel-chart" class="pane"><canvas id="chart-monthModel"></canvas><p class="note">按月×模型无独立图表，切至表格查看。</p></div>
+  <div id="pane-monthModel-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th><th onclick="sortTable(this)">推理tokens</th></tr></thead><tbody>
 {{range .MonthModelRows}}<tr><td>{{.Month}}</td><td><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td><td data-sort="{{.ReasoningTokens}}">{{thousands .ReasoningTokens}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-cache" class="tab"><div class="card"><h2>缓存占比（按月）</h2><canvas id="chart-cache"></canvas></div>
-<div class="card"><h2>缓存统计</h2>
-<table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">输入(未命中)</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入5m</th><th onclick="sortTable(this)">缓存写入1h</th><th onclick="sortTable(this)">缓存合计</th><th onclick="sortTable(this)">缓存占比</th></tr></thead><tbody>
+</div></div>
+<div id="tab-cache" class="tab"><div class="card">
+  <div class="card-head"><h2>缓存</h2><div class="view-switch"><button id="btn-cache-chart" onclick="switchView('cache','chart')">图表</button><button id="btn-cache-table" class="active" onclick="switchView('cache','table')">表格</button></div></div>
+  <div id="pane-cache-chart" class="pane"><canvas id="chart-cache"></canvas></div>
+  <div id="pane-cache-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">输入(未命中)</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入5m</th><th onclick="sortTable(this)">缓存写入1h</th><th onclick="sortTable(this)">缓存合计</th><th onclick="sortTable(this)">缓存占比</th></tr></thead><tbody>
 {{range .CacheRows}}<tr><td>{{.Month}}</td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{.CacheWrite5m}}">{{thousands .CacheWrite5m}}</td><td data-sort="{{.CacheWrite1h}}">{{thousands .CacheWrite1h}}</td><td>{{thousands (add (add .CacheRead .CacheWrite5m) .CacheWrite1h)}}</td><td>{{printf "%.1f%%" (cachePct .InputTokens .CacheRead .CacheWrite5m .CacheWrite1h)}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-daily" class="tab"><div class="card"><h2>每日成本 <select id="monthPicker" onchange="location.href='?month='+this.value" style="margin-left:8px;padding:4px 8px;border:1px solid #e5e7eb;border-radius:8px">{{range .AvailableMonths}}<option value="{{.}}" {{if eq . $.DailyMonth}}selected{{end}}>{{.}}</option>{{end}}</select> <input type="month" value="{{.DailyMonth}}" onchange="location.href='?month='+this.value" style="margin-left:6px;padding:4px;border:1px solid #e5e7eb;border-radius:8px"></h2><canvas id="chart-daily"></canvas></div>
-<div class="card"><h2>{{.DailyMonth}} 每日 × 模型 <span class="badge">默认当月</span></h2>
-<table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th></tr></thead><tbody>
+</div></div>
+<div id="tab-daily" class="tab"><div class="card">
+  <div class="card-head"><h2>每日 <select id="monthPicker" onchange="location.href='?month='+this.value" style="padding:4px 8px;border:1px solid #e5e7eb;border-radius:8px">{{range .AvailableMonths}}<option value="{{.}}" {{if eq . $.DailyMonth}}selected{{end}}>{{.}}</option>{{end}}</select> <input type="month" value="{{.DailyMonth}}" onchange="location.href='?month='+this.value" style="padding:4px;border:1px solid #e5e7eb;border-radius:8px"> <span class="badge">{{.DailyMonth}}</span></h2><div class="view-switch"><button id="btn-daily-chart" onclick="switchView('daily','chart')">图表</button><button id="btn-daily-table" class="active" onclick="switchView('daily','table')">表格</button></div></div>
+  <div id="pane-daily-chart" class="pane"><canvas id="chart-daily"></canvas></div>
+  <div id="pane-daily-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th></tr></thead><tbody>
 {{range .DailyRows}}<tr><td>{{.Day}}</td><td><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-peak" class="tab"><div class="card"><h2>DeepSeek 峰谷成本（峰 9-12,14-18 北京）</h2><canvas id="chart-peak"></canvas></div>
-<div class="card"><h2>DeepSeek 峰谷明细</h2>
-<table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">总调用</th><th onclick="sortTable(this)">峰调用</th><th onclick="sortTable(this)">峰占比</th><th onclick="sortTable(this)">峰成本</th><th onclick="sortTable(this)">谷成本</th><th onclick="sortTable(this)">峰每亿输入</th><th onclick="sortTable(this)">谷每亿输入</th></tr></thead><tbody>
+</div></div>
+<div id="tab-peak" class="tab"><div class="card">
+  <div class="card-head"><h2>DeepSeek 峰谷 ({{.PeakStart}}起)</h2><div class="view-switch"><button id="btn-peak-chart" onclick="switchView('peak','chart')">图表</button><button id="btn-peak-table" class="active" onclick="switchView('peak','table')">表格</button></div></div>
+  <div id="pane-peak-chart" class="pane"><canvas id="chart-peak"></canvas></div>
+  <div id="pane-peak-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">总调用</th><th onclick="sortTable(this)">峰调用</th><th onclick="sortTable(this)">峰占比</th><th onclick="sortTable(this)">峰成本</th><th onclick="sortTable(this)">谷成本</th><th onclick="sortTable(this)">峰每亿输入</th><th onclick="sortTable(this)">谷每亿输入</th></tr></thead><tbody>
 {{range .PeakRows}}<tr><td>{{.Day}}</td><td data-sort="{{.Total}}">{{thousands .Total}}</td><td data-sort="{{.PeakCalls}}">{{thousands .PeakCalls}}</td><td>{{printf "%.1f%%" (peakPct .Total .PeakCalls)}}</td><td data-sort="{{.PeakCost}}">{{thousandsF .PeakCost}}</td><td data-sort="{{.OffCost}}">{{thousandsF .OffCost}}</td><td>{{per100MIn .PeakCost .PeakInput}}</td><td>{{per100MIn .OffCost .OffInput}}</td></tr>{{end}}
 </tbody></table></div></div>
+</div></div>
 </main>
 <script>
 function openTab(e,n){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.getElementById('tab-'+n).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));e.currentTarget.classList.add('active')}
+function switchView(tab,view){document.querySelectorAll('#tab-'+tab+' .pane').forEach(p=>p.classList.remove('active'));document.getElementById('pane-'+tab+'-'+view).classList.add('active');document.querySelectorAll('#tab-'+tab+' .view-switch button').forEach(b=>b.classList.remove('active'));document.getElementById('btn-'+tab+'-'+view).classList.add('active');if(view==='chart') setTimeout(()=>window.dispatchEvent(new Event('resize')),50)}
 function sortTable(th){
   const tbl=th.closest('table'), idx=[...th.parentNode.children].indexOf(th), tbody=tbl.tBodies[0];
   const asc=th.dataset.asc!=='1'; th.dataset.asc=asc?'1':'0';
