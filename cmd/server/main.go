@@ -24,11 +24,14 @@ func main() {
 		dailyMon  string
 	)
 	flag.StringVar(&dbPath, "db", "usage.db", "SQLite 路径")
-	flag.StringVar(&addr, "addr", ":8080", "监听地址")
+	flag.StringVar(&addr, "addr", ":18080", "监听地址")
 	flag.StringVar(&ws, "workspace", "wrk_01KQE6ZT476376EYCQDQ0AMC28", "workspace id")
 	flag.StringVar(&peakStart, "peak-start", "2026-08-17", "deepseek 峰谷起始日")
-	flag.StringVar(&dailyMon, "daily-month", "2026-08", "每日表月份")
+	flag.StringVar(&dailyMon, "daily-month", "", "每日表月份(默认当月 YYYY-MM)")
 	flag.Parse()
+	if dailyMon == "" {
+		dailyMon = time.Now().Format("2006-01")
+	}
 
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -87,6 +90,16 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
+func availableMonths(ctx context.Context, st *store.Store, ws string) []string {
+	// 复用 MonthStats 的月份列表，避免新增 SQL
+	rows, _ := st.MonthStats(ctx, ws)
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Month)
+	}
+	return out
+}
+
 func buildData(ctx context.Context, st *store.Store, ws, dailyMon, peakStart string) map[string]any {
 	var total int64
 	_ = st.CountAll(ctx, ws, &total)
@@ -109,6 +122,7 @@ func buildData(ctx context.Context, st *store.Store, ws, dailyMon, peakStart str
 		"Total":           thousands(total),
 		"PeakStart":       peakStart,
 		"DailyMonth":      dailyMon,
+		"AvailableMonths": availableMonths(ctx, st, ws),
 		"MonthRows":       monthRows,
 		"ModelRows":       modelRows,
 		"MonthModelRows":  monthModelRows,
@@ -337,8 +351,8 @@ tr:hover td{background:#fafafa}
 <table><thead><tr><th onclick="sortTable(this)">月份</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">输入(未命中)</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入5m</th><th onclick="sortTable(this)">缓存写入1h</th><th onclick="sortTable(this)">缓存合计</th><th onclick="sortTable(this)">缓存占比</th></tr></thead><tbody>
 {{range .CacheRows}}<tr><td>{{.Month}}</td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{.CacheWrite5m}}">{{thousands .CacheWrite5m}}</td><td data-sort="{{.CacheWrite1h}}">{{thousands .CacheWrite1h}}</td><td>{{thousands (add (add .CacheRead .CacheWrite5m) .CacheWrite1h)}}</td><td>{{printf "%.1f%%" (cachePct .InputTokens .CacheRead .CacheWrite5m .CacheWrite1h)}}</td></tr>{{end}}
 </tbody></table></div></div>
-<div id="tab-daily" class="tab"><div class="card"><h2>{{.DailyMonth}} 每日成本</h2><canvas id="chart-daily"></canvas></div>
-<div class="card"><h2>{{.DailyMonth}} 每日 × 模型</h2>
+<div id="tab-daily" class="tab"><div class="card"><h2>每日成本 <select id="monthPicker" onchange="location.href='?month='+this.value" style="margin-left:8px;padding:4px 8px;border:1px solid #e5e7eb;border-radius:8px">{{range .AvailableMonths}}<option value="{{.}}" {{if eq . $.DailyMonth}}selected{{end}}>{{.}}</option>{{end}}</select> <input type="month" value="{{.DailyMonth}}" onchange="location.href='?month='+this.value" style="margin-left:6px;padding:4px;border:1px solid #e5e7eb;border-radius:8px"></h2><canvas id="chart-daily"></canvas></div>
+<div class="card"><h2>{{.DailyMonth}} 每日 × 模型 <span class="badge">默认当月</span></h2>
 <table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th></tr></thead><tbody>
 {{range .DailyRows}}<tr><td>{{.Day}}</td><td><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td></tr>{{end}}
 </tbody></table></div></div>

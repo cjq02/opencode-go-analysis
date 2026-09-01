@@ -26,8 +26,11 @@ func main() {
 	flag.StringVar(&outPath, "out", "docs/index.html", "输出 HTML 路径")
 	flag.StringVar(&ws, "workspace", "wrk_01KQE6ZT476376EYCQDQ0AMC28", "workspace id")
 	flag.StringVar(&peakStart, "peak-start", "2026-08-17", "deepseek 峰谷起始日")
-	flag.StringVar(&dailyMon, "daily-month", "2026-08", "每日表月份")
+	flag.StringVar(&dailyMon, "daily-month", "", "每日表月份(默认当月 YYYY-MM)")
 	flag.Parse()
+	if dailyMon == "" {
+		dailyMon = time.Now().Format("2006-01")
+	}
 
 	ctx := context.Background()
 	st, err := store.Open(dbPath)
