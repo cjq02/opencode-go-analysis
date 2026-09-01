@@ -389,6 +389,140 @@ GROUP BY month ORDER BY month`, workspaceID)
 	return out, rows.Err()
 }
 
+// DailyModelStats 按指定月份(YYYY-MM)的每天x模型分组统计
+func (s *Store) DailyModelStats(ctx context.Context, workspaceID, monthPrefix string) ([]struct {
+	Day, Model      string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT strftime('%Y-%m-%d', time_created/1000, 'unixepoch') AS day,
+       model,
+       COUNT(*),
+       SUM(cost_raw)/1e8,
+       SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
+       SUM(output_tokens),
+       SUM(reasoning_tokens),
+       SUM(cache_read_tokens),
+       SUM(cache_write_5m),
+       SUM(cache_write_1h)
+FROM usage_records WHERE workspace_id = ? AND day LIKE ? || '%'
+GROUP BY day, model ORDER BY day, 3 DESC`, workspaceID, monthPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Day, Model      string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
+	}
+	for rows.Next() {
+		var r struct {
+			Day, Model      string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+			CacheRead       int64
+			CacheWrite5m    int64
+			CacheWrite1h    int64
+		}
+		if err := rows.Scan(&r.Day, &r.Model, &r.Count, &r.CostUSD,
+			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens,
+			&r.CacheRead, &r.CacheWrite5m, &r.CacheWrite1h); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeepseekPeak 统计 deepseek 模型自 startDay(北京时间 YYYY-MM-DD) 起，
+// 每天按峰时段(9-12,14-18)与谷时段拆分
+func (s *Store) DeepseekPeak(ctx context.Context, workspaceID, startDay string) ([]struct {
+	Day                                 string
+	Total                               int64
+	PeakCalls                           int64
+	PeakCost                            float64
+	PeakInput, PeakOutput               int64
+	OffCalls                            int64
+	OffCost                             float64
+	OffInput, OffOutput                 int64
+}, error) {
+	const tzShift = 28800000 // +8h(ms)，换算北京时间
+	rows, err := s.db.QueryContext(ctx, `
+WITH t AS (
+  SELECT
+    strftime('%Y-%m-%d', (time_created+?)/1000, 'unixepoch') AS day,
+    CAST(strftime('%H', (time_created+?)/1000, 'unixepoch') AS INTEGER)
+      IN (9,10,11,14,15,16,17) AS is_peak,
+    cost_raw,
+    input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h AS input_all,
+    output_tokens
+  FROM usage_records
+  WHERE workspace_id = ? AND model LIKE 'deepseek%'
+    AND strftime('%Y-%m-%d', (time_created+?)/1000, 'unixepoch') >= ?
+)
+SELECT day,
+  COUNT(*),
+  SUM(CASE WHEN is_peak THEN 1 ELSE 0 END),
+  SUM(CASE WHEN is_peak THEN cost_raw ELSE 0 END)/1e8,
+  SUM(CASE WHEN is_peak THEN input_all ELSE 0 END),
+  SUM(CASE WHEN is_peak THEN output_tokens ELSE 0 END),
+  SUM(CASE WHEN is_peak THEN 0 ELSE 1 END),
+  SUM(CASE WHEN is_peak THEN 0 ELSE cost_raw END)/1e8,
+  SUM(CASE WHEN is_peak THEN 0 ELSE input_all END),
+  SUM(CASE WHEN is_peak THEN 0 ELSE output_tokens END)
+FROM t GROUP BY day ORDER BY day`, tzShift, tzShift, workspaceID, tzShift, startDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Day                                 string
+		Total                               int64
+		PeakCalls                           int64
+		PeakCost                            float64
+		PeakInput, PeakOutput               int64
+		OffCalls                            int64
+		OffCost                             float64
+		OffInput, OffOutput                 int64
+	}
+	for rows.Next() {
+		var r struct {
+			Day                                 string
+			Total                               int64
+			PeakCalls                           int64
+			PeakCost                            float64
+			PeakInput, PeakOutput               int64
+			OffCalls                            int64
+			OffCost                             float64
+			OffInput, OffOutput                 int64
+		}
+		if err := rows.Scan(&r.Day, &r.Total, &r.PeakCalls, &r.PeakCost,
+			&r.PeakInput, &r.PeakOutput, &r.OffCalls, &r.OffCost,
+			&r.OffInput, &r.OffOutput); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetLastPage 读取上次抓到的页数（断点续传）
 func (s *Store) GetLastPage(ctx context.Context, workspaceID string) (int, error) {
 	var page int
