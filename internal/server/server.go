@@ -264,7 +264,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	}
 	quotaMonth, quotaRows := quotaEstimate(monthRows, monthModelRows)
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
-	quotaSummary := buildQuotaSummary(quotaRows)
+	quotaSummary := buildQuotaSummary(quotaRows, qForTpl)
 	return map[string]any{
 		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
 		"Range":           rangeStr,
@@ -410,20 +410,35 @@ func quotaChartData(rows []QuotaRow) ([]string, []int64, []int64, []int64) {
 	return l, a, b, c
 }
 
-func buildQuotaSummary(rows []QuotaRow) QuotaSummary {
+func buildQuotaSummary(rows []QuotaRow, q quota.Quota) QuotaSummary {
 	var s QuotaSummary
+	if q.Monthly == 0 {
+		q = quota.Default
+	}
+	s.TotalQuotaUSD = q.Monthly // 总额度固定 $60
+	var weightedCost float64
 	for _, r := range rows {
 		s.TotalCount += r.Count
-		s.TotalCost += r.CostUSD
-		s.TotalQuotaUSD += r.QuotaUSD
 		s.TotalInput += r.InputTokens
-		s.TotalMaxMonthly += r.MaxTokensMonthly
+		// 按权重换算到总额度：cost * 60 / perModelQuota（如 glm $1 / $15 *60 = $4）
+		w := r.CostUSD
+		if r.QuotaUSD > 0 {
+			w = r.CostUSD * q.Monthly / r.QuotaUSD
+		}
+		weightedCost += w
+	}
+	s.TotalCost = weightedCost // 汇总为加权后等效成本
+	if s.TotalCost > 0 && s.TotalInput > 0 {
+		// 需结合加权成本反推等效 tokens？保持按加权成本换算
+		// 等效单价 = 加权成本 / 总输入，则满额 tokens = 60 / 单价
+		s.TotalMaxMonthly = int64(float64(s.TotalInput) / s.TotalCost * q.Monthly)
+		s.UsedPercent = s.TotalCost / q.Monthly * 100
+	} else {
+		s.TotalMaxMonthly = 0
+		s.UsedPercent = 0
 	}
 	s.RemainingUSD = s.TotalQuotaUSD - s.TotalCost
 	s.RemainingTokens = s.TotalMaxMonthly - s.TotalInput
-	if s.TotalMaxMonthly > 0 {
-		s.UsedPercent = float64(s.TotalInput) / float64(s.TotalMaxMonthly) * 100
-	}
 	return s
 }
 
