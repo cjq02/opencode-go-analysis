@@ -31,9 +31,11 @@ tr:hover td{background:#fafafa}
 .note{font-size:12px;color:#6b7280;margin-top:8px}
 </style>
 </head><body>
-<header>
-<h1>opencode.ai 用量分析</h1>
-<p>生成时间 {{.GeneratedAt}} · 数据范围 {{.Range}} · 共 {{.Total}} 条 · 输入tokens = input + cache_read + cache_write · 本地实时</p>
+<header style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+<div style="flex:1;min-width:260px"><h1>opencode.ai 用量分析</h1>
+<p>生成时间 {{.GeneratedAt}} · 数据范围 {{.Range}} · 共 {{.Total}} 条 · 输入tokens = input + cache_read + cache_write · 本地实时</p></div>
+<button id="fetchBtn" onclick="doFetch()" style="padding:8px 16px;border:0;border-radius:999px;background:#4f46e5;color:#fff;cursor:pointer;font-size:13px;white-space:nowrap">增量抓取</button>
+<span id="fetchStatus" style="font-size:12px;color:#a5b4fc;min-width:120px"></span>
 </header>
 <nav>
 <button onclick="openTab(event,'month')">按月</button>
@@ -88,6 +90,7 @@ tr:hover td{background:#fafafa}
 </div></div>
 </main>
 <script>
+async function doFetch(){const btn=document.getElementById('fetchBtn'),st=document.getElementById('fetchStatus');btn.disabled=true;btn.textContent='抓取中…';st.textContent='请求中…';try{const r=await fetch('/api/fetch',{method:'POST'});const j=await r.json();if(!r.ok) throw new Error(j.error||'失败');st.textContent=`新增 ${j.added} 条, 共 ${j.total} 条`;setTimeout(()=>location.reload(),1200)}catch(e){st.textContent='失败: '+e.message;btn.disabled=false;btn.textContent='增量抓取'}}
 function openTab(e,n){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.getElementById('tab-'+n).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));e.currentTarget.classList.add('active')}
 function switchView(tab,view){document.querySelectorAll('#tab-'+tab+' .pane').forEach(p=>p.classList.remove('active'));document.getElementById('pane-'+tab+'-'+view).classList.add('active');document.querySelectorAll('#tab-'+tab+' .view-switch button').forEach(b=>b.classList.remove('active'));document.getElementById('btn-'+tab+'-'+view).classList.add('active');if(view==='chart') setTimeout(()=>window.dispatchEvent(new Event('resize')),50)}
 function sortTable(th){
