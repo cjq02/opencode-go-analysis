@@ -42,6 +42,17 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 启动时异步预取额度，保证首屏即可显示按模型额度；增量抓取时也会同步刷新
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		if q, err := quota.Fetch(ctx); err == nil {
+			quotaMu.Lock()
+			currentQuota = q
+			quotaMu.Unlock()
+			log.Printf("quota prefetch: 5h $%.0f / weekly $%.0f / monthly $%.0f, perModel %d", q.FiveHour, q.Weekly, q.Monthly, len(q.PerModel))
+		}
+	}()
 	tmpl := template.Must(template.New("site").Funcs(template.FuncMap{
 		"thousands":  format.Thousands,
 		"thousandsF": format.ThousandsF,
@@ -208,9 +219,11 @@ type QuotaRow struct {
 	CostUSD          float64
 	InputTokens      int64
 	Per100M          float64 // $ per 100M input tokens
+	QuotaUSD         float64 // 当月按模型额度（来自文档“使用额度”列）
 	MaxTokens5h      int64
 	MaxTokensWeekly  int64
 	MaxTokensMonthly int64
+	UsedPercent      float64 // 已用 / 月满额 *100
 }
 
 // buildData 组装模板数据（表格降序，图表升序）
@@ -344,15 +357,25 @@ func quotaEstimate(monthRows []struct {
 		if q.FiveHour == 0 {
 			q = quota.Default
 		}
+		monthlyQuota := q.GetPerModel(r.Model)
+		max5h := int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour)
+		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * q.Weekly)
+		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
+		usedPct := 0.0
+		if maxMonthly > 0 {
+			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
+		}
 		out = append(out, QuotaRow{
 			Model:            r.Model,
 			Count:            r.Count,
 			CostUSD:          r.CostUSD,
 			InputTokens:      r.InputTokens,
 			Per100M:          per100M,
-			MaxTokens5h:      int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour),
-			MaxTokensWeekly:  int64(float64(r.InputTokens) / r.CostUSD * q.Weekly),
-			MaxTokensMonthly: int64(float64(r.InputTokens) / r.CostUSD * q.Monthly),
+			QuotaUSD:         monthlyQuota,
+			MaxTokens5h:      max5h,
+			MaxTokensWeekly:  maxWeekly,
+			MaxTokensMonthly: maxMonthly,
+			UsedPercent:      usedPct,
 		})
 	}
 	return latest, out
