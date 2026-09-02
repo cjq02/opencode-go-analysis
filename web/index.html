@@ -3,6 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>opencode.ai 用量分析</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
 *{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f6f7f9;color:#1a1a1a}
 header{background:#111827;color:#fff;padding:20px 24px}header h1{margin:0;font-size:20px}header p{margin:6px 0 0;color:#9ca3af;font-size:13px}
@@ -93,7 +94,7 @@ tr:hover td{background:#fafafa}
 </tbody></table></div></div>
 </div></div>
 <div id="tab-quota" class="tab"><div class="card">
-  <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button><button id="btn-quota-share" onclick="switchView('quota','share')">分享</button></div></div>
+  <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button><button id="btn-quota-share" onclick="switchView('quota','share')">分享</button></div><div style="display:flex;gap:8px;align-items:center;margin-left:auto"><span id="shareStatus" style="font-size:11px;color:#6b7280"></span><button onclick="downloadQuota()" style="display:inline-flex;align-items:center;gap:5px;padding:7px 12px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:11px;font-weight:600;color:#374151"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 下载</button><button onclick="publishQuota()" style="display:inline-flex;align-items:center;gap:5px;padding:7px 12px;border:0;border-radius:999px;background:linear-gradient(135deg,#ff2442 0%,#ff4d6a 100%);color:#fff;cursor:pointer;font-size:11px;font-weight:700"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg> 发布</button></div></div>
   <div id="pane-quota-chart" class="pane"><canvas id="chart-quota"></canvas><p class="note">按当月各模型实际单价（成本/输入tokens）换算满额可用输入 tokens（含缓存）。</p></div>
   <div id="pane-quota-table" class="pane active">
   <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">
@@ -107,28 +108,43 @@ tr:hover td{background:#fafafa}
  <tr style="font-weight:700;background:#f9fafb"><td>汇总</td><td>{{thousands .QuotaSummary.TotalCount}}</td><td>{{thousandsF .QuotaSummary.TotalCost}}</td><td>—</td><td>{{thousandsF .QuotaSummary.TotalQuotaUSD}}</td><td>{{thousands .QuotaSummary.TotalInput}}</td><td>{{printf "%.1f%%" .QuotaSummary.UsedPercent}}</td><td>{{thousands .QuotaSummary.RemainingTokens}}</td><td>{{thousandsF .QuotaSummary.RemainingUSD}}</td><td>—</td><td>—</td><td>{{thousands .QuotaSummary.TotalMaxMonthly}}</td></tr>
 </tbody></table></div></div>
   <div id="pane-quota-share" class="pane">
-    <div style="display:flex;justify-content:center;padding:12px 0"><div id="shareCard" style="width:380px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.12);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-      <div style="background:linear-gradient(135deg,#4f46e5 0%,#06b6d4 100%);color:#fff;padding:20px;text-align:center">
-        <div style="font-size:11px;letter-spacing:0.08em;opacity:0.85">OPENCODE GO · {{.QuotaMonth}}</div>
-        <div style="font-size:19px;font-weight:800;margin:6px 0">各模型满额可用 tokens</div>
-        <div style="font-size:11px;opacity:0.8">额度 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} · 按当月单价换算</div>
+    <div style="display:flex;justify-content:center;padding:16px;background:linear-gradient(180deg,#f6f7f9 0%,#eef2ff 100%);border-radius:12px"><div id="shareCard" style="width:460px;max-width:92vw;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 20px 40px rgba(79,70,229,0.15),0 4px 12px rgba(0,0,0,0.08);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+      <div style="background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 45%,#06b6d4 100%);color:#fff;padding:28px 24px 22px;text-align:center;position:relative;overflow:hidden">
+        <div style="position:absolute;top:-24px;right:-24px;width:130px;height:130px;background:rgba(255,255,255,0.12);border-radius:50%"></div>
+        <div style="position:absolute;bottom:-18px;left:-18px;width:90px;height:90px;background:rgba(255,255,255,0.08);border-radius:50%"></div>
+        <div style="position:relative;z-index:1">
+          <div style="display:inline-block;background:rgba(255,255,255,0.18);backdrop-filter:blur(8px);padding:5px 14px;border-radius:999px;font-size:11px;letter-spacing:0.1em;font-weight:600">OPENCODE GO · {{.QuotaMonth}}</div>
+          <div style="font-size:22px;font-weight:800;margin:12px 0 6px;letter-spacing:-0.02em">各模型满额可用</div>
+          <div style="font-size:12px;opacity:0.9;letter-spacing:0.02em">额度 5h ${{.Quota.FiveHour}} · 周 ${{.Quota.Weekly}} · 月 ${{.Quota.Monthly}} · 按当月单价换算</div>
+        </div>
       </div>
-      <div style="padding:14px 14px 6px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        {{range .QuotaRows}}<div style="background:#f9fafb;border:1px solid #f0f0f0;border-radius:12px;padding:10px;text-align:center">
-          <div style="font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><code style="font-size:11px">{{.Model}}</code></div>
-          <div style="font-size:16px;font-weight:800;margin:6px 0;color:#111827">{{thousands .MaxTokensMonthly}}</div>
-          <div style="font-size:10px;color:#6b7280">额度 ${{printf "%.0f" .QuotaUSD}} · tokens</div>
-        </div>{{end}}
+      <div style="padding:18px;background:#fafafb">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          {{range .QuotaRows}}<div style="background:#fff;border:1px solid #f0f0f0;border-radius:14px;padding:16px 12px;text-align:center;position:relative;overflow:hidden">
+            <div style="position:absolute;top:0;right:0;padding:4px 10px;border-radius:0 14px 0 10px;font-size:10px;font-weight:700;{{if eq .QuotaUSD 15.0}}background:#ede9fe;color:#6d28d9{{else if eq .QuotaUSD 30.0}}background:#dbeafe;color:#1d4ed8{{else}}background:#ccfbf1;color:#0f766e{{end}}">${{printf "%.0f" .QuotaUSD}}</div>
+            <div style="font-size:14px;font-weight:800;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em;margin-top:8px"><code style="font-size:14px;background:none;padding:0;font-weight:800">{{.Model}}</code></div>
+            <div style="font-size:18px;font-weight:800;color:#4f46e5;margin:8px 0 2px;letter-spacing:-0.02em">{{thousands .MaxTokensMonthly}}</div>
+            <div style="font-size:11px;color:#9ca3af;letter-spacing:0.04em;font-weight:600">TOKENS</div>
+          </div>{{end}}
+        </div>
       </div>
-      <div style="padding:8px 14px 12px;font-size:10px;color:#9ca3af;text-align:center;line-height:1.5">额度 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} · 按当月单价换算 · 生成 {{.GeneratedAt}}<br/>来源 opencode.ai/docs/zh-cn/go</div>
-    </div>
-  </div>
-  </div>
+      <div style="padding:12px 16px;background:#fff;border-top:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:9px;color:#9ca3af;line-height:1.5">来源 opencode.ai/docs/zh-cn/go<br/>生成 {{.GeneratedAt}}</div>
+        <div style="font-size:9px;color:#6b7280;background:#f3f4f6;padding:5px 10px;border-radius:999px;font-weight:600">{{.QuotaMonth}} · {{len .QuotaRows}} 模型</div>
+      </div>
+    </div></div>
+  </div></div>
 </div></div>
 </main>
 <script>
 function changeMonth(v){const u=new URL(location.href);u.searchParams.set('month',v);location.href=u.toString()}
 async function doFetch(){const btn=document.getElementById('fetchBtn'),st=document.getElementById('fetchStatus');btn.disabled=true;btn.textContent='抓取中…';st.textContent='请求中…';try{const r=await fetch('/api/fetch',{method:'POST'});const j=await r.json();if(!r.ok) throw new Error(j.error||'失败');st.textContent=`新增 ${j.added} 条, 共 ${j.total} 条`;setTimeout(()=>location.reload(),1200)}catch(e){st.textContent='失败: '+e.message;btn.disabled=false;btn.textContent='增量抓取'}}
+function getQuotaActiveEl(){const p=document.querySelector('#tab-quota .pane.active');if(!p) return document.getElementById('shareCard');if(p.id==='pane-quota-share') return document.getElementById('shareCard');if(p.id==='pane-quota-table') return p.querySelector('.table-wrap')||p;if(p.id==='pane-quota-chart') return p.querySelector('canvas')||p;return p}
+async function captureShare(){const el=document.getElementById('shareCard');if(!el) throw new Error('未找到分享卡');if(typeof html2canvas==='undefined') throw new Error('html2canvas 未加载');return await html2canvas(el,{scale:2,backgroundColor:'#f6f7f9',useCORS:true})}
+async function downloadQuota(){const st=document.getElementById('shareStatus');const pane=document.querySelector('#tab-quota .pane.active');const isTable=pane&&pane.id==='pane-quota-table';const name=isTable?`opencode-go-{{.QuotaMonth}}-table.png`:`opencode-go-{{.QuotaMonth}}.png`;st.textContent='生成图片中…';try{const el=getQuotaActiveEl();const c=await html2canvas(el,{scale:2,backgroundColor:'#ffffff',useCORS:true});const a=document.createElement('a');a.download=name;a.href=c.toDataURL('image/png');a.click();st.textContent='已下载';setTimeout(()=>st.textContent='',2000)}catch(e){st.textContent='失败: '+e.message}}
+async function publishQuota(){const st=document.getElementById('shareStatus');st.textContent='生成并复制中…';try{const c=await captureShare();c.toBlob(async b=>{try{if(b&&navigator.clipboard&&window.ClipboardItem){await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);st.textContent='已复制图片，正在打开小红书…'}else{const a=document.createElement('a');a.download=`opencode-go-{{.QuotaMonth}}.png`;a.href=c.toDataURL('image/png');a.click();st.textContent='已下载（剪贴板不支持），请手动上传…'}}catch{const a=document.createElement('a');a.download=`opencode-go-{{.QuotaMonth}}.png`;a.href=c.toDataURL('image/png');a.click();st.textContent='已下载，请在小红书上传…'}window.open('https://creator.xiaohongshu.com/publish/publish','_blank');setTimeout(()=>st.textContent='',3000)},'image/png')}catch(e){st.textContent='失败: '+e.message}}
+async function downloadShare(){return downloadQuota()}
+async function publishToXhs(){return publishQuota()}
 async function refreshQuota(){const s=document.getElementById('quotaStatus');s.textContent='刷新中…';try{const r=await fetch('/api/quota/refresh',{method:'POST'});const j=await r.json();if(!r.ok) throw new Error(j.error||'失败');s.textContent=`已更新: 5h $${j.fiveHour} / 周 $${j.weekly} / 月 $${j.monthly}`;setTimeout(()=>location.reload(),800)}catch(e){s.textContent='失败: '+e.message}}
 function openTab(e,n){document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.getElementById('tab-'+n).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));e.currentTarget.classList.add('active');const u=new URL(location.href);u.searchParams.set('tab',n);history.pushState(null,'',u)}
 function applyTabFromURL(){const t=new URLSearchParams(location.search).get('tab');if(!t) return;const pane=document.getElementById('tab-'+t);if(!pane) return;document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));pane.classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));const btn=document.querySelector(`nav button[onclick*=\"'${t}'\"]`);if(btn) btn.classList.add('active')}
