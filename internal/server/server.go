@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -265,6 +266,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	quotaMonth, quotaRows := quotaEstimate(monthRows, monthModelRows)
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
 	quotaSummary := buildQuotaSummary(quotaRows, qForTpl)
+	shareTop3, shareCheapest := buildShareData(quotaRows)
 	return map[string]any{
 		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
 		"Range":           rangeStr,
@@ -283,6 +285,8 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"QuotaMonth":      quotaMonth,
 		"QuotaRows":       quotaRows,
 		"QuotaSummary":    quotaSummary,
+		"ShareTop3":       shareTop3,
+		"ShareCheapest":   shareCheapest,
 		"MonthLabelsJSON": mustJSON(monthLabels),
 		"MonthCostsJSON":  mustJSON(monthCosts),
 		"MonthCountsJSON": mustJSON(monthCounts),
@@ -408,6 +412,27 @@ func quotaChartData(rows []QuotaRow) ([]string, []int64, []int64, []int64) {
 		c = append(c, r.MaxTokensMonthly)
 	}
 	return l, a, b, c
+}
+
+func buildShareData(rows []QuotaRow) ([]QuotaRow, *QuotaRow) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	// Top3 已用占比最高
+	cp := append([]QuotaRow(nil), rows...)
+	sort.Slice(cp, func(i, j int) bool { return cp[i].UsedPercent > cp[j].UsedPercent })
+	top3 := cp
+	if len(top3) > 3 {
+		top3 = top3[:3]
+	}
+	// 最省：每亿成本最低
+	cp2 := append([]QuotaRow(nil), rows...)
+	sort.Slice(cp2, func(i, j int) bool { return cp2[i].Per100M < cp2[j].Per100M })
+	var cheapest *QuotaRow
+	if len(cp2) > 0 {
+		cheapest = &cp2[0]
+	}
+	return top3, cheapest
 }
 
 func buildQuotaSummary(rows []QuotaRow, q quota.Quota) QuotaSummary {

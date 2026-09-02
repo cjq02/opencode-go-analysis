@@ -93,7 +93,7 @@ tr:hover td{background:#fafafa}
 </tbody></table></div></div>
 </div></div>
 <div id="tab-quota" class="tab"><div class="card">
-  <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button></div></div>
+  <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button><button id="btn-quota-share" onclick="switchView('quota','share')">分享</button></div></div>
   <div id="pane-quota-chart" class="pane"><canvas id="chart-quota"></canvas><p class="note">按当月各模型实际单价（成本/输入tokens）换算满额可用输入 tokens（含缓存）。</p></div>
   <div id="pane-quota-table" class="pane active">
   <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px">
@@ -104,8 +104,26 @@ tr:hover td{background:#fafafa}
   </div>
   <div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">当月调用</th><th onclick="sortTable(this)">当月成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">当月额度</th><th onclick="sortTable(this)">已用 tokens</th><th onclick="sortTable(this)">已用百分比</th><th onclick="sortTable(this)">当月剩余额度 (tokens)</th><th onclick="sortTable(this)">当月剩余额度 (USD)</th><th onclick="sortTable(this)">5h 满额 tokens</th><th onclick="sortTable(this)">周满额 tokens</th><th onclick="sortTable(this)">月满额 tokens</th></tr></thead><tbody>
 {{range .QuotaRows}}<tr><td style="text-align:left"><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.Per100M}}">{{printf "$%.2f" .Per100M}}</td><td data-sort="{{.QuotaUSD}}">${{printf "%.0f" .QuotaUSD}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.UsedPercent}}">{{printf "%.1f%%" .UsedPercent}}</td><td data-sort="{{.RemainingTokens}}">{{thousands .RemainingTokens}}</td><td data-sort="{{.RemainingUSD}}">{{thousandsF .RemainingUSD}}</td><td data-sort="{{.MaxTokens5h}}">{{thousands .MaxTokens5h}}</td><td data-sort="{{.MaxTokensWeekly}}">{{thousands .MaxTokensWeekly}}</td><td data-sort="{{.MaxTokensMonthly}}">{{thousands .MaxTokensMonthly}}</td></tr>{{end}}
-<tr style="font-weight:700;background:#f9fafb"><td>汇总</td><td>{{thousands .QuotaSummary.TotalCount}}</td><td>{{thousandsF .QuotaSummary.TotalCost}}</td><td>—</td><td>{{thousandsF .QuotaSummary.TotalQuotaUSD}}</td><td>{{thousands .QuotaSummary.TotalInput}}</td><td>{{printf "%.1f%%" .QuotaSummary.UsedPercent}}</td><td>{{thousands .QuotaSummary.RemainingTokens}}</td><td>{{thousandsF .QuotaSummary.RemainingUSD}}</td><td>—</td><td>—</td><td>{{thousands .QuotaSummary.TotalMaxMonthly}}</td></tr>
+ <tr style="font-weight:700;background:#f9fafb"><td>汇总</td><td>{{thousands .QuotaSummary.TotalCount}}</td><td>{{thousandsF .QuotaSummary.TotalCost}}</td><td>—</td><td>{{thousandsF .QuotaSummary.TotalQuotaUSD}}</td><td>{{thousands .QuotaSummary.TotalInput}}</td><td>{{printf "%.1f%%" .QuotaSummary.UsedPercent}}</td><td>{{thousands .QuotaSummary.RemainingTokens}}</td><td>{{thousandsF .QuotaSummary.RemainingUSD}}</td><td>—</td><td>—</td><td>{{thousands .QuotaSummary.TotalMaxMonthly}}</td></tr>
 </tbody></table></div></div>
+  <div id="pane-quota-share" class="pane">
+    <div style="display:flex;justify-content:center;padding:12px 0"><div id="shareCard" style="width:380px;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.12);font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+      <div style="background:linear-gradient(135deg,#4f46e5 0%,#06b6d4 100%);color:#fff;padding:20px;text-align:center">
+        <div style="font-size:11px;letter-spacing:0.08em;opacity:0.85">OPENCODE GO · {{.QuotaMonth}}</div>
+        <div style="font-size:19px;font-weight:800;margin:6px 0">各模型满额可用 tokens</div>
+        <div style="font-size:11px;opacity:0.8">额度 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} · 按当月单价换算</div>
+      </div>
+      <div style="padding:14px 14px 6px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        {{range .QuotaRows}}<div style="background:#f9fafb;border:1px solid #f0f0f0;border-radius:12px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><code style="font-size:11px">{{.Model}}</code></div>
+          <div style="font-size:16px;font-weight:800;margin:6px 0;color:#111827">{{thousands .MaxTokensMonthly}}</div>
+          <div style="font-size:10px;color:#6b7280">额度 ${{printf "%.0f" .QuotaUSD}} · tokens</div>
+        </div>{{end}}
+      </div>
+      <div style="padding:8px 14px 12px;font-size:10px;color:#9ca3af;text-align:center;line-height:1.5">额度 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} · 按当月单价换算 · 生成 {{.GeneratedAt}}<br/>来源 opencode.ai/docs/zh-cn/go</div>
+    </div>
+  </div>
+  </div>
 </div></div>
 </main>
 <script>
