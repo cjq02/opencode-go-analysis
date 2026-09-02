@@ -9,7 +9,7 @@ header{background:#111827;color:#fff;padding:20px 24px}header h1{margin:0;font-s
 nav{display:flex;gap:6px;padding:12px 16px;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10;overflow-x:auto}
 nav button{white-space:nowrap;padding:8px 14px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:13px}
 nav button.active{background:#111827;color:#fff;border-color:#111827}
-main{max-width:1280px;margin:0 auto;padding:16px}
+main{max-width:1600px;margin:0 auto;padding:16px}
 .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .card-head h2{margin:0;font-size:15px}
@@ -19,10 +19,13 @@ main{max-width:1280px;margin:0 auto;padding:16px}
 canvas{max-height:320px}
 .tab{display:none}.tab.active{display:block}
 .pane{display:none}.pane.active{display:block}
-.table-wrap{height:calc(100vh - {{.TableOffset}});max-height:calc(100vh - {{.TableOffset}});overflow:auto;border:1px solid #e5e7eb;border-radius:8px}
-.table-wrap table{margin:0}
+.table-wrap{height:auto;max-height:none;min-height:0;overflow-x:auto;overflow-y:visible;border:1px solid #e5e7eb;border-radius:8px;scrollbar-width:thin;scrollbar-color:#d1d5db transparent}
+.table-wrap::-webkit-scrollbar{height:6px;width:6px}
+.table-wrap::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:999px}
+.table-wrap table{margin:0;width:100%;table-layout:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:8px 10px;border-bottom:1px solid #f0f0f0;text-align:right;white-space:nowrap}
+#tab-quota th,#tab-quota td{padding:6px 8px;font-size:12px}
 th{position:sticky;top:0;background:#fafafa;cursor:pointer;user-select:none;text-align:right;z-index:1}
 th:first-child,td:first-child{text-align:left}
 tr:hover td{background:#fafafa}
@@ -92,8 +95,15 @@ tr:hover td{background:#fafafa}
 <div id="tab-quota" class="tab"><div class="card">
   <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button></div></div>
   <div id="pane-quota-chart" class="pane"><canvas id="chart-quota"></canvas><p class="note">按当月各模型实际单价（成本/输入tokens）换算满额可用输入 tokens（含缓存）。</p></div>
-  <div id="pane-quota-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">当月调用</th><th onclick="sortTable(this)">当月成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">当月额度</th><th onclick="sortTable(this)">已用 tokens</th><th onclick="sortTable(this)">已用百分比</th><th onclick="sortTable(this)">5h 满额 tokens</th><th onclick="sortTable(this)">周满额 tokens</th><th onclick="sortTable(this)">月满额 tokens</th></tr></thead><tbody>
-{{range .QuotaRows}}<tr><td style="text-align:left"><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.Per100M}}">{{printf "$%.2f" .Per100M}}</td><td data-sort="{{.QuotaUSD}}">${{printf "%.0f" .QuotaUSD}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.UsedPercent}}">{{printf "%.1f%%" .UsedPercent}}</td><td data-sort="{{.MaxTokens5h}}">{{thousands .MaxTokens5h}}</td><td data-sort="{{.MaxTokensWeekly}}">{{thousands .MaxTokensWeekly}}</td><td data-sort="{{.MaxTokensMonthly}}">{{thousands .MaxTokensMonthly}}</td></tr>{{end}}
+  <div id="pane-quota-table" class="pane active">
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:13px">
+    <span class="badge">汇总 {{.QuotaMonth}}</span>
+    <span>已用 {{thousandsF .QuotaSummary.TotalCost}} / 额度 {{thousandsF .QuotaSummary.TotalQuotaUSD}} · 剩余 {{thousandsF .QuotaSummary.RemainingUSD}} ({{printf "%.1f%%" .QuotaSummary.UsedPercent}} 已用)</span>
+    <span>tokens 已用 {{thousands .QuotaSummary.TotalInput}} / 满额 {{thousands .QuotaSummary.TotalMaxMonthly}} · 剩余 {{thousands .QuotaSummary.RemainingTokens}}</span>
+  </div>
+  <div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">当月调用</th><th onclick="sortTable(this)">当月成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">当月额度</th><th onclick="sortTable(this)">已用 tokens</th><th onclick="sortTable(this)">已用百分比</th><th onclick="sortTable(this)">当月剩余额度 (tokens)</th><th onclick="sortTable(this)">当月剩余额度 (USD)</th><th onclick="sortTable(this)">5h 满额 tokens</th><th onclick="sortTable(this)">周满额 tokens</th><th onclick="sortTable(this)">月满额 tokens</th></tr></thead><tbody>
+{{range .QuotaRows}}<tr><td style="text-align:left"><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.Per100M}}">{{printf "$%.2f" .Per100M}}</td><td data-sort="{{.QuotaUSD}}">${{printf "%.0f" .QuotaUSD}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.UsedPercent}}">{{printf "%.1f%%" .UsedPercent}}</td><td data-sort="{{.RemainingTokens}}">{{thousands .RemainingTokens}}</td><td data-sort="{{.RemainingUSD}}">{{thousandsF .RemainingUSD}}</td><td data-sort="{{.MaxTokens5h}}">{{thousands .MaxTokens5h}}</td><td data-sort="{{.MaxTokensWeekly}}">{{thousands .MaxTokensWeekly}}</td><td data-sort="{{.MaxTokensMonthly}}">{{thousands .MaxTokensMonthly}}</td></tr>{{end}}
+<tr style="font-weight:700;background:#f9fafb"><td>汇总</td><td>{{thousands .QuotaSummary.TotalCount}}</td><td>{{thousandsF .QuotaSummary.TotalCost}}</td><td>—</td><td>{{thousandsF .QuotaSummary.TotalQuotaUSD}}</td><td>{{thousands .QuotaSummary.TotalInput}}</td><td>{{printf "%.1f%%" .QuotaSummary.UsedPercent}}</td><td>{{thousands .QuotaSummary.RemainingTokens}}</td><td>{{thousandsF .QuotaSummary.RemainingUSD}}</td><td>—</td><td>—</td><td>{{thousands .QuotaSummary.TotalMaxMonthly}}</td></tr>
 </tbody></table></div></div>
 </div></div>
 </main>

@@ -224,6 +224,19 @@ type QuotaRow struct {
 	MaxTokensWeekly  int64
 	MaxTokensMonthly int64
 	UsedPercent      float64 // 已用 / 月满额 *100
+	RemainingTokens  int64
+	RemainingUSD     float64
+}
+
+type QuotaSummary struct {
+	TotalCount       int64
+	TotalCost        float64
+	TotalQuotaUSD    float64
+	RemainingUSD     float64
+	TotalInput       int64
+	TotalMaxMonthly  int64
+	RemainingTokens  int64
+	UsedPercent      float64
 }
 
 // buildData 组装模板数据（表格降序，图表升序）
@@ -251,6 +264,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	}
 	quotaMonth, quotaRows := quotaEstimate(monthRows, monthModelRows)
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
+	quotaSummary := buildQuotaSummary(quotaRows)
 	return map[string]any{
 		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
 		"Range":           rangeStr,
@@ -268,6 +282,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"Quota":           qForTpl,
 		"QuotaMonth":      quotaMonth,
 		"QuotaRows":       quotaRows,
+		"QuotaSummary":    quotaSummary,
 		"MonthLabelsJSON": mustJSON(monthLabels),
 		"MonthCostsJSON":  mustJSON(monthCosts),
 		"MonthCountsJSON": mustJSON(monthCounts),
@@ -376,6 +391,8 @@ func quotaEstimate(monthRows []struct {
 			MaxTokensWeekly:  maxWeekly,
 			MaxTokensMonthly: maxMonthly,
 			UsedPercent:      usedPct,
+			RemainingTokens:  maxMonthly - r.InputTokens,
+			RemainingUSD:     monthlyQuota - r.CostUSD,
 		})
 	}
 	return latest, out
@@ -391,6 +408,23 @@ func quotaChartData(rows []QuotaRow) ([]string, []int64, []int64, []int64) {
 		c = append(c, r.MaxTokensMonthly)
 	}
 	return l, a, b, c
+}
+
+func buildQuotaSummary(rows []QuotaRow) QuotaSummary {
+	var s QuotaSummary
+	for _, r := range rows {
+		s.TotalCount += r.Count
+		s.TotalCost += r.CostUSD
+		s.TotalQuotaUSD += r.QuotaUSD
+		s.TotalInput += r.InputTokens
+		s.TotalMaxMonthly += r.MaxTokensMonthly
+	}
+	s.RemainingUSD = s.TotalQuotaUSD - s.TotalCost
+	s.RemainingTokens = s.TotalMaxMonthly - s.TotalInput
+	if s.TotalMaxMonthly > 0 {
+		s.UsedPercent = float64(s.TotalInput) / float64(s.TotalMaxMonthly) * 100
+	}
+	return s
 }
 
 func (s *Server) availableMonths(ctx context.Context) []string {
