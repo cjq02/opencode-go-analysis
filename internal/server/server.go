@@ -227,6 +227,7 @@ type QuotaRow struct {
 	UsedPercent      float64 // 已用 / 月满额 *100
 	RemainingTokens  int64
 	RemainingUSD     float64
+	TokensPer1USD    int64 // $1 可使用 tokens
 }
 
 type QuotaSummary struct {
@@ -384,6 +385,7 @@ func quotaEstimate(monthRows []struct {
 		if maxMonthly > 0 {
 			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
 		}
+		tokensPer1USD := int64(float64(r.InputTokens) / r.CostUSD)
 		out = append(out, QuotaRow{
 			Model:            r.Model,
 			Count:            r.Count,
@@ -397,6 +399,7 @@ func quotaEstimate(monthRows []struct {
 			UsedPercent:      usedPct,
 			RemainingTokens:  maxMonthly - r.InputTokens,
 			RemainingUSD:     monthlyQuota - r.CostUSD,
+			TokensPer1USD:    tokensPer1USD,
 		})
 	}
 	return latest, out
