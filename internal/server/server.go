@@ -15,6 +15,7 @@ import (
 	"opencode-go-analysis/internal/envfile"
 	"opencode-go-analysis/internal/format"
 	"opencode-go-analysis/internal/model"
+	"opencode-go-analysis/internal/quota"
 	"opencode-go-analysis/internal/store"
 	"opencode-go-analysis/web"
 )
@@ -75,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/month", s.handleMonth)
 	mux.HandleFunc("/api/model", s.handleModel)
 	mux.HandleFunc("/api/fetch", s.handleFetch)
+	mux.HandleFunc("/api/quota", s.handleQuota)
+	mux.HandleFunc("/api/quota/refresh", s.handleQuotaRefresh)
 	return mux
 }
 
@@ -146,6 +149,15 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// 增量抓取时同步爬取最新额度
+	if q, err := quota.Fetch(ctx); err == nil {
+		quotaMu.Lock()
+		currentQuota = q
+		quotaMu.Unlock()
+		log.Printf("quota refreshed on fetch: 5h $%.0f / weekly $%.0f / monthly $%.0f", q.FiveHour, q.Weekly, q.Monthly)
+	} else {
+		log.Printf("quota fetch on incremental failed, keep current: %v", err)
+	}
 	known, err := s.st.AllIDs(ctx, s.ws)
 	if err != nil {
 		http.Error(w, `{"error":"read db failed"}`, http.StatusInternalServerError)
@@ -186,6 +198,21 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"added": added, "total": total})
 }
 
+// 额度默认来自 https://opencode.ai/docs/zh-cn/go/#使用限制，启动时尝试爬取刷新
+var currentQuota = quota.Default
+var quotaMu sync.RWMutex
+
+type QuotaRow struct {
+	Model            string
+	Count            int64
+	CostUSD          float64
+	InputTokens      int64
+	Per100M          float64 // $ per 100M input tokens
+	MaxTokens5h      int64
+	MaxTokensWeekly  int64
+	MaxTokensMonthly int64
+}
+
 // buildData 组装模板数据（表格降序，图表升序）
 func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[string]any {
 	var total int64
@@ -203,6 +230,14 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	cacheLabels, cacheInput, cacheRead, cacheWrite := cacheChartData(cacheRows)
 	dailyLabels, dailyCosts := dailyChartData(dailyRows)
 	peakLabels, peakCosts, offCosts := peakChartData(peakRows)
+	quotaMu.RLock()
+	qForTpl := currentQuota
+	quotaMu.RUnlock()
+	if qForTpl.FiveHour == 0 {
+		qForTpl = quota.Default
+	}
+	quotaMonth, quotaRows := quotaEstimate(monthRows, monthModelRows)
+	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
 	return map[string]any{
 		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
 		"Range":           rangeStr,
@@ -217,6 +252,9 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"CacheRows":       cacheRows,
 		"DailyRows":       dailyRows,
 		"PeakRows":        peakRows,
+		"Quota":           qForTpl,
+		"QuotaMonth":      quotaMonth,
+		"QuotaRows":       quotaRows,
 		"MonthLabelsJSON": mustJSON(monthLabels),
 		"MonthCostsJSON":  mustJSON(monthCosts),
 		"MonthCountsJSON": mustJSON(monthCounts),
@@ -231,7 +269,105 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"PeakLabelsJSON":  mustJSON(peakLabels),
 		"PeakCostsJSON":   mustJSON(peakCosts),
 		"OffCostsJSON":    mustJSON(offCosts),
+		"QuotaLabelsJSON": mustJSON(qLabels),
+		"Quota5hJSON":     mustJSON(q5h),
+		"QuotaWeeklyJSON": mustJSON(qWeekly),
+		"QuotaMonthlyJSON": mustJSON(qMonthly),
 	}
+}
+
+func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
+	quotaMu.RLock()
+	q := currentQuota
+	quotaMu.RUnlock()
+	if q.Source == "" {
+		q = quota.Default
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(q)
+}
+
+func (s *Server) handleQuotaRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	q, err := quota.Fetch(ctx)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	quotaMu.Lock()
+	currentQuota = q
+	quotaMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(q)
+}
+
+func quotaEstimate(monthRows []struct {
+	Month           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+}, monthModelRows []struct {
+	Month           string
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}) (string, []QuotaRow) {
+	if len(monthRows) == 0 {
+		return "", nil
+	}
+	latest := monthRows[0].Month
+	var out []QuotaRow
+	for _, r := range monthModelRows {
+		if r.Month != latest {
+			continue
+		}
+		if r.InputTokens <= 0 || r.CostUSD <= 0 {
+			continue
+		}
+		per100M := r.CostUSD / float64(r.InputTokens) * 1e8
+		quotaMu.RLock()
+		q := currentQuota
+		quotaMu.RUnlock()
+		if q.FiveHour == 0 {
+			q = quota.Default
+		}
+		out = append(out, QuotaRow{
+			Model:            r.Model,
+			Count:            r.Count,
+			CostUSD:          r.CostUSD,
+			InputTokens:      r.InputTokens,
+			Per100M:          per100M,
+			MaxTokens5h:      int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour),
+			MaxTokensWeekly:  int64(float64(r.InputTokens) / r.CostUSD * q.Weekly),
+			MaxTokensMonthly: int64(float64(r.InputTokens) / r.CostUSD * q.Monthly),
+		})
+	}
+	return latest, out
+}
+
+func quotaChartData(rows []QuotaRow) ([]string, []int64, []int64, []int64) {
+	var l []string
+	var a, b, c []int64
+	for _, r := range rows {
+		l = append(l, r.Model)
+		a = append(a, r.MaxTokens5h)
+		b = append(b, r.MaxTokensWeekly)
+		c = append(c, r.MaxTokensMonthly)
+	}
+	return l, a, b, c
 }
 
 func (s *Server) availableMonths(ctx context.Context) []string {

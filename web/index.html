@@ -44,6 +44,7 @@ tr:hover td{background:#fafafa}
 <button onclick="openTab(event,'cache')">缓存</button>
 <button class="active" onclick="openTab(event,'daily')">每日 ({{.DailyMonth}})</button>
 <button onclick="openTab(event,'peak')">DeepSeek 峰谷 ({{.PeakStart}}起)</button>
+<button onclick="openTab(event,'quota')">满额预估 ({{.QuotaMonth}})</button>
 </nav>
 <main>
 <div id="tab-month" class="tab"><div class="card">
@@ -88,6 +89,13 @@ tr:hover td{background:#fafafa}
 {{range .PeakRows}}<tr><td>{{.Day}}</td><td data-sort="{{.Total}}">{{thousands .Total}}</td><td data-sort="{{.PeakCalls}}">{{thousands .PeakCalls}}</td><td>{{printf "%.1f%%" (peakPct .Total .PeakCalls)}}</td><td data-sort="{{.PeakCost}}">{{thousandsF .PeakCost}}</td><td data-sort="{{.OffCost}}">{{thousandsF .OffCost}}</td><td>{{per100MIn .PeakCost .PeakInput}}</td><td>{{per100MIn .OffCost .OffInput}}</td></tr>{{end}}
 </tbody></table></div></div>
 </div></div>
+<div id="tab-quota" class="tab"><div class="card">
+  <div class="card-head"><h2>满额预估 — {{.QuotaMonth}} 当月单价 · 额度: 5h ${{.Quota.FiveHour}} / 周 ${{.Quota.Weekly}} / 月 ${{.Quota.Monthly}} <span class="badge">tokens = 额度 / 单价</span> <button onclick="refreshQuota()" style="margin-left:8px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#fff;cursor:pointer;font-size:12px">刷新额度</button> <span id="quotaStatus" style="font-size:12px;color:#6b7280"></span></h2><div class="view-switch"><button id="btn-quota-chart" onclick="switchView('quota','chart')">图表</button><button id="btn-quota-table" class="active" onclick="switchView('quota','table')">表格</button></div></div>
+  <div id="pane-quota-chart" class="pane"><canvas id="chart-quota"></canvas><p class="note">按当月各模型实际单价（成本/输入tokens）换算满额可用输入 tokens（含缓存）。</p></div>
+  <div id="pane-quota-table" class="pane active"><div class="table-wrap"><table><thead><tr><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">当月调用</th><th onclick="sortTable(this)">当月成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">5h 满额 tokens</th><th onclick="sortTable(this)">周满额 tokens</th><th onclick="sortTable(this)">月满额 tokens</th></tr></thead><tbody>
+{{range .QuotaRows}}<tr><td style="text-align:left"><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td data-sort="{{.Per100M}}">{{printf "$%.2f" .Per100M}}</td><td data-sort="{{.MaxTokens5h}}">{{thousands .MaxTokens5h}}</td><td data-sort="{{.MaxTokensWeekly}}">{{thousands .MaxTokensWeekly}}</td><td data-sort="{{.MaxTokensMonthly}}">{{thousands .MaxTokensMonthly}}</td></tr>{{end}}
+</tbody></table></div></div>
+</div></div>
 </main>
 <script>
 async function doFetch(){const btn=document.getElementById('fetchBtn'),st=document.getElementById('fetchStatus');btn.disabled=true;btn.textContent='抓取中…';st.textContent='请求中…';try{const r=await fetch('/api/fetch',{method:'POST'});const j=await r.json();if(!r.ok) throw new Error(j.error||'失败');st.textContent=`新增 ${j.added} 条, 共 ${j.total} 条`;setTimeout(()=>location.reload(),1200)}catch(e){st.textContent='失败: '+e.message;btn.disabled=false;btn.textContent='增量抓取'}}
@@ -109,10 +117,12 @@ const modLabels={{.ModelLabelsJSON}}, modCosts={{.ModelCostsJSON}};
 const cLabels={{.CacheLabelsJSON}}, cIn={{.CacheInputJSON}}, cRd={{.CacheReadJSON}}, cWr={{.CacheWriteJSON}};
 const dLabels={{.DailyLabelsJSON}}, dCosts={{.DailyCostsJSON}};
 const pLabels={{.PeakLabelsJSON}}, pCosts={{.PeakCostsJSON}}, oCosts={{.OffCostsJSON}};
+const qLabels={{.QuotaLabelsJSON}}, q5h={{.Quota5hJSON}}, qWeekly={{.QuotaWeeklyJSON}}, qMonthly={{.QuotaMonthlyJSON}};
 new Chart(document.getElementById('chart-month'),{type:'bar',data:{labels:mLabels,datasets:[{label:'成本 $',data:mCosts,yAxisID:'y',type:'line',borderColor:'#4f46e5',tension:.3},{label:'调用次数',data:mCounts,yAxisID:'y1',backgroundColor:'#e0e7ff'}]},options:{responsive:true,interaction:{mode:'index',intersect:false},scales:{y:{type:'linear',position:'left'},y1:{type:'linear',position:'right',grid:{drawOnChartArea:false}}}}});
 new Chart(document.getElementById('chart-model'),{type:'bar',data:{labels:modLabels,datasets:[{label:'成本 $',data:modCosts,backgroundColor:'#6366f1'}]},options:{responsive:true,plugins:{legend:{display:false}}}});
 new Chart(document.getElementById('chart-cache'),{type:'bar',data:{labels:cLabels,datasets:[{label:'输入(未命中)',data:cIn,backgroundColor:'#fca5a5'},{label:'缓存读取',data:cRd,backgroundColor:'#86efac'},{label:'缓存写入',data:cWr,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
 new Chart(document.getElementById('chart-daily'),{type:'line',data:{labels:dLabels,datasets:[{label:'每日成本 $',data:dCosts,borderColor:'#0ea5e9',backgroundColor:'rgba(14,165,233,.15)',fill:true,tension:.3}]},options:{responsive:true}});
 new Chart(document.getElementById('chart-peak'),{type:'bar',data:{labels:pLabels,datasets:[{label:'峰成本',data:pCosts,backgroundColor:'#f59e0b'},{label:'谷成本',data:oCosts,backgroundColor:'#10b981'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
+new Chart(document.getElementById('chart-quota'),{type:'bar',data:{labels:qLabels,datasets:[{label:'5h $12',data:q5h,backgroundColor:'#fca5a5'},{label:'周 $30',data:qWeekly,backgroundColor:'#86efac'},{label:'月 $60',data:qMonthly,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:false},y:{beginAtZero:true}}}});
 </script>
 </body></html>
