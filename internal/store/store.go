@@ -194,8 +194,8 @@ SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
        SUM(cache_read_tokens),
        SUM(cache_write_5m),
        SUM(cache_write_1h)
-FROM usage_records WHERE workspace_id = ?
-GROUP BY month, model ORDER BY month, 3 DESC`, workspaceID)
+ FROM usage_records WHERE workspace_id = ?
+GROUP BY month, model ORDER BY month DESC, 3 DESC`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +261,8 @@ SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
        SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
        SUM(output_tokens),
        SUM(reasoning_tokens)
-FROM usage_records WHERE workspace_id = ?
-GROUP BY month ORDER BY month`, workspaceID)
+ FROM usage_records WHERE workspace_id = ?
+GROUP BY month ORDER BY month DESC`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +358,7 @@ SELECT strftime('%Y-%m', time_created/1000, 'unixepoch') AS month,
        SUM(cache_write_5m),
        SUM(cache_write_1h)
 FROM usage_records WHERE workspace_id = ?
-GROUP BY month ORDER BY month`, workspaceID)
+GROUP BY month ORDER BY month DESC`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -412,8 +412,8 @@ SELECT strftime('%Y-%m-%d', time_created/1000, 'unixepoch') AS day,
        SUM(cache_read_tokens),
        SUM(cache_write_5m),
        SUM(cache_write_1h)
-FROM usage_records WHERE workspace_id = ? AND day LIKE ? || '%'
-GROUP BY day, model ORDER BY day, 3 DESC`, workspaceID, monthPrefix)
+ FROM usage_records WHERE workspace_id = ? AND day LIKE ? || '%'
+GROUP BY day, model ORDER BY day DESC, 3 DESC`, workspaceID, monthPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +487,7 @@ SELECT day,
   SUM(CASE WHEN is_peak THEN 0 ELSE cost_raw END)/1e8,
   SUM(CASE WHEN is_peak THEN 0 ELSE input_all END),
   SUM(CASE WHEN is_peak THEN 0 ELSE output_tokens END)
-FROM t GROUP BY day ORDER BY day`, tzShift, tzShift, workspaceID, tzShift, startDay)
+ FROM t GROUP BY day ORDER BY day DESC`, tzShift, tzShift, workspaceID, tzShift, startDay)
 	if err != nil {
 		return nil, err
 	}

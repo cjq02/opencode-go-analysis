@@ -13,7 +13,7 @@
     {
       "label": "serve: 本地服务 :18080",
       "type": "shell",
-      "command": "make serve",
+      "command": "fuser -k 18080/tcp 2>/dev/null; lsof -ti:18080 2>/dev/null | xargs -r kill -9 2>/dev/null; pkill -9 server 2>/dev/null; sleep 1; make serve",
       "options": { "cwd": "${workspaceFolder}" },
       "group": "build",
       "isBackground": true,
