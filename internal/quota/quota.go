@@ -112,6 +112,28 @@ func normalizeModel(s string) string {
 	return s
 }
 
+// DeepSeek 文档定价（https://opencode.ai/docs/zh-cn/go/，每 1M tokens 美元）。
+// 峰时：周一至周五 01:00-04:00 / 06:00-10:00 UTC（即北京时间 09:00-12:00 / 14:00-18:00），
+// 其余时段（含周末）为谷时；峰价约为谷价 2 倍。
+type DeepSeekPrice struct {
+	Input     float64
+	Output    float64
+	CacheRead float64
+	QuotaUSD  float64
+}
+
+var DeepSeekDocs = map[string]DeepSeekPrice{
+	"deepseek-v4-flash (Off-Peak)":            {Input: 0.22, Output: 0.66, CacheRead: 0.007, QuotaUSD: 30},
+	"deepseek-v4-flash (Peak)":                {Input: 0.44, Output: 1.32, CacheRead: 0.014, QuotaUSD: 30},
+	"deepseek-v4-flash-vision-exp (Off-Peak)": {Input: 0.22, Output: 0.66, CacheRead: 0.007, QuotaUSD: 15},
+	"deepseek-v4-flash-vision-exp (Peak)":     {Input: 0.44, Output: 1.32, CacheRead: 0.014, QuotaUSD: 15},
+	"deepseek-v4-pro (Off-Peak)":              {Input: 0.66, Output: 1.98, CacheRead: 0.022, QuotaUSD: 15},
+	"deepseek-v4-pro (Peak)":                  {Input: 1.32, Output: 3.96, CacheRead: 0.044, QuotaUSD: 15},
+}
+
+// PeakHoursNote 峰时段说明（北京时间）
+const PeakHoursNote = "峰时：周一至周五 北京时间 09:00-12:00 / 14:00-18:00（UTC 01:00-04:00 / 06:00-10:00），其余为谷时"
+
 // GetPerModel 返回归一化后的按模型额度，未命中则回退 monthly 通用额度
 func (q Quota) GetPerModel(model string) float64 {
 	key := normalizeModel(model)

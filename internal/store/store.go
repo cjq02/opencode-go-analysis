@@ -292,6 +292,54 @@ SELECT model,
 	return out, rows.Err()
 }
 
+// CycleDeepseekSplit 按订阅周期窗口拆分 deepseek 各模型的峰/谷用量。
+// 峰时定义同 DeepseekPeak：北京时间周一至周五 09-12 / 14-18。
+// 返回每行一个 (model, isPeak) 组合，非 deepseek 模型 isPeak 恒为 0。
+func (s *Store) CycleDeepseekSplit(ctx context.Context, workspaceID string, sinceMs int64) ([]struct {
+	Model       string
+	IsPeak      int64
+	Count       int64
+	CostUSD     float64
+	InputTokens int64
+}, error) {
+	const tzShift = 28800000 // +8h(ms)，换算北京时间
+	rows, err := s.db.QueryContext(ctx, `
+SELECT model,
+  (CAST(strftime('%w', (time_created+?)/1000, 'unixepoch') AS INTEGER) IN (1,2,3,4,5)
+    AND CAST(strftime('%H', (time_created+?)/1000, 'unixepoch') AS INTEGER)
+      IN (9,10,11,14,15,16,17)) AS is_peak,
+  COUNT(*),
+  SUM(cost_raw)/1e8,
+  SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h)
+ FROM usage_records WHERE workspace_id = ? AND time_created >= ? AND model LIKE 'deepseek%'
+ GROUP BY model, is_peak`, tzShift, tzShift, workspaceID, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Model       string
+		IsPeak      int64
+		Count       int64
+		CostUSD     float64
+		InputTokens int64
+	}
+	for rows.Next() {
+		var r struct {
+			Model       string
+			IsPeak      int64
+			Count       int64
+			CostUSD     float64
+			InputTokens int64
+		}
+		if err := rows.Scan(&r.Model, &r.IsPeak, &r.Count, &r.CostUSD, &r.InputTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // QueryRow 执行单值聚合查询（agg 为 MIN/MAX 等），写入 dest
 func (s *Store) QueryRow(ctx context.Context, workspaceID, agg string, dest *int64) error {
 	return s.db.QueryRowContext(ctx,
@@ -511,7 +559,9 @@ GROUP BY day, model ORDER BY day DESC, 3 DESC`, workspaceID, monthPrefix)
 }
 
 // DeepseekPeak 统计 deepseek 模型自 startDay(北京时间 YYYY-MM-DD) 起，
-// 每天按峰时段(9-12,14-18)与谷时段拆分
+// 每天按峰时段与谷时段拆分。
+// 峰时定义（文档 https://opencode.ai/docs/zh-cn/go/）：周一至周五 01:00-04:00 / 06:00-10:00 UTC，
+// 即北京时间 09:00-12:00 / 14:00-18:00；周末全天为谷时。
 func (s *Store) DeepseekPeak(ctx context.Context, workspaceID, startDay string) ([]struct {
 	Day                                 string
 	Total                               int64
@@ -527,8 +577,9 @@ func (s *Store) DeepseekPeak(ctx context.Context, workspaceID, startDay string) 
 WITH t AS (
   SELECT
     strftime('%Y-%m-%d', (time_created+?)/1000, 'unixepoch') AS day,
-    CAST(strftime('%H', (time_created+?)/1000, 'unixepoch') AS INTEGER)
-      IN (9,10,11,14,15,16,17) AS is_peak,
+    (CAST(strftime('%w', (time_created+?)/1000, 'unixepoch') AS INTEGER) IN (1,2,3,4,5)
+      AND CAST(strftime('%H', (time_created+?)/1000, 'unixepoch') AS INTEGER)
+        IN (9,10,11,14,15,16,17)) AS is_peak,
     cost_raw,
     input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h AS input_all,
     output_tokens
@@ -546,7 +597,7 @@ SELECT day,
   SUM(CASE WHEN is_peak THEN 0 ELSE cost_raw END)/1e8,
   SUM(CASE WHEN is_peak THEN 0 ELSE input_all END),
   SUM(CASE WHEN is_peak THEN 0 ELSE output_tokens END)
- FROM t GROUP BY day ORDER BY day DESC`, tzShift, tzShift, workspaceID, tzShift, startDay)
+ FROM t GROUP BY day ORDER BY day DESC`, tzShift, tzShift, tzShift, workspaceID, tzShift, startDay)
 	if err != nil {
 		return nil, err
 	}

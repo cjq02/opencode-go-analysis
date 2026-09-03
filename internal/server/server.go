@@ -20,6 +20,7 @@ import (
 	"opencode-go-analysis/internal/store"
 	"opencode-go-analysis/internal/subscription"
 	"opencode-go-analysis/web"
+	"strings"
 )
 
 // TABLE_OFFSET 表格高度偏移常量：表格高度 = 100vh - TABLE_OFFSET
@@ -334,10 +335,15 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
 		quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
 		if cycleRows, err := s.st.CycleModelStats(ctx, s.ws, monthlyStart); err == nil && len(cycleRows) > 0 {
+			// DeepSeek 按峰/谷拆分为两行（文档峰时：周一至周五 北京时间 09-12 / 14-18）
+			expandedCycleRows := cycleRows
+			if splitRows, err := s.st.CycleDeepseekSplit(ctx, s.ws, monthlyStart); err == nil && len(splitRows) > 0 {
+				expandedCycleRows = expandCycleRowsWithPeak(cycleRows, splitRows)
+			}
 			if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
-				quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, cycleRows, quotaCycleLabel)
+				quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, expandedCycleRows, quotaCycleLabel)
 			} else {
-				quotaMonth, quotaRows = quotaEstimateCycle(cycleRows, quotaCycleLabel)
+				quotaMonth, quotaRows = quotaEstimateCycle(expandedCycleRows, quotaCycleLabel)
 			}
 		} else {
 			quotaMonth, quotaRows = quotaEstimate(monthRows, monthModelRows)
@@ -554,6 +560,113 @@ func quotaEstimate(monthRows []struct {
 	return latest, out
 }
 
+// isDeepSeekModel 是否为 DeepSeek 系模型（需区分峰/谷定价）
+func isDeepSeekModel(m string) bool {
+	return strings.HasPrefix(strings.ToLower(m), "deepseek")
+}
+
+// expandCycleRowsWithPeak 将周期聚合中的 deepseek 行按峰/谷拆分为两行。
+// 显示名沿用文档口径 "model (Peak)" / "model (Off-Peak)"，quota.GetPerModel 会去掉括号取同一额度。
+func expandCycleRowsWithPeak(cycleRows []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}, splitRows []struct {
+	Model       string
+	IsPeak      int64
+	Count       int64
+	CostUSD     float64
+	InputTokens int64
+}) []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+} {
+	type splitKey struct {
+		peakCount int64
+		peakCost  float64
+		peakInput int64
+		offCount  int64
+		offCost   float64
+		offInput  int64
+		hasPeak   bool
+		hasOff    bool
+	}
+	byModel := map[string]*splitKey{}
+	for _, s := range splitRows {
+		k, ok := byModel[s.Model]
+		if !ok {
+			k = &splitKey{}
+			byModel[s.Model] = k
+		}
+		if s.IsPeak == 1 {
+			k.peakCount, k.peakCost, k.peakInput = s.Count, s.CostUSD, s.InputTokens
+			k.hasPeak = true
+		} else {
+			k.offCount, k.offCost, k.offInput = s.Count, s.CostUSD, s.InputTokens
+			k.hasOff = true
+		}
+	}
+	var out []struct {
+		Model           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
+	}
+	for _, r := range cycleRows {
+		if !isDeepSeekModel(r.Model) {
+			out = append(out, r)
+			continue
+		}
+		sp, ok := byModel[r.Model]
+		if !ok || !(sp.hasPeak && sp.hasOff) {
+			// 只有单边数据时仍保留原行，避免拆分后丢失总量
+			out = append(out, r)
+			continue
+		}
+		out = append(out, struct {
+			Model           string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+			CacheRead       int64
+			CacheWrite5m    int64
+			CacheWrite1h    int64
+		}{Model: r.Model + " (Peak)", Count: sp.peakCount, CostUSD: sp.peakCost, InputTokens: sp.peakInput})
+		out = append(out, struct {
+			Model           string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+			CacheRead       int64
+			CacheWrite5m    int64
+			CacheWrite1h    int64
+		}{Model: r.Model + " (Off-Peak)", Count: sp.offCount, CostUSD: sp.offCost, InputTokens: sp.offInput})
+	}
+	return out
+}
+
 func quotaEstimateCycle(cycleRows []struct {
 	Model           string
 	Count           int64
@@ -656,8 +769,73 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 	if bd.Limit > 0 {
 		limitMonthly = bd.Limit
 	}
+	quotaMu.RLock()
+	q := currentQuota
+	quotaMu.RUnlock()
+	if q.FiveHour == 0 {
+		q = quota.Default
+	}
+	buildRow := func(displayModel string, count int64, costUSD float64, inputTokens int64) (QuotaRow, bool) {
+		if inputTokens <= 0 || costUSD <= 0 {
+			return QuotaRow{}, false
+		}
+		per100M := costUSD / float64(inputTokens) * 1e8
+		// 周期额度取文档的每模型每月配额（GetPerModel 会去掉 " (Peak)" 后缀，峰/谷同额度，如 flash $30）
+		monthlyQuotaUSD := q.GetPerModel(displayModel)
+		var maxMonthly, maxWeekly, max5h int64
+		if per100M > 0 {
+			maxMonthly = int64(monthlyQuotaUSD / per100M * 1e8)
+			if limitMonthly > 0 {
+				maxWeekly = int64(float64(maxMonthly) * float64(limitWeekly) / float64(limitMonthly))
+				max5h = int64(float64(maxMonthly) * float64(limit5h) / float64(limitMonthly))
+			} else {
+				maxWeekly = int64(q.Weekly / per100M * 1e8)
+				max5h = int64(q.FiveHour / per100M * 1e8)
+			}
+		}
+		usedPct := float64(costUSD) / monthlyQuotaUSD * 100
+		tokensPer1USD := int64(float64(inputTokens) / costUSD)
+		var tokensPer100Calls int64
+		if count > 0 {
+			tokensPer100Calls = inputTokens * 100 / count
+		}
+		return QuotaRow{
+			Model:             displayModel,
+			Count:             count,
+			CostUSD:           costUSD,
+			InputTokens:       inputTokens,
+			Per100M:           per100M,
+			QuotaUSD:          monthlyQuotaUSD,
+			MaxTokens5h:       max5h,
+			MaxTokensWeekly:   maxWeekly,
+			MaxTokensMonthly:  maxMonthly,
+			UsedPercent:       usedPct,
+			RemainingTokens:   maxMonthly - inputTokens,
+			RemainingUSD:      monthlyQuotaUSD - costUSD,
+			TokensPer1USD:     tokensPer1USD,
+			TokensPer100Calls: tokensPer100Calls,
+		}, true
+	}
 	var out []QuotaRow
 	for _, mb := range bd.Rows {
+		// DeepSeek 在 cycleRows 中已拆为 "(Peak)" / "(Off-Peak)" 两行，此处分别建行
+		if isDeepSeekModel(mb.Model) {
+			peakEntry, hasPeak := dbMap[mb.Model+" (Peak)"]
+			offEntry, hasOff := dbMap[mb.Model+" (Off-Peak)"]
+			if hasPeak || hasOff {
+				if hasPeak {
+					if row, ok := buildRow(mb.Model+" (Peak)", peakEntry.Count, peakEntry.CostUSD, peakEntry.InputTokens); ok {
+						out = append(out, row)
+					}
+				}
+				if hasOff {
+					if row, ok := buildRow(mb.Model+" (Off-Peak)", offEntry.Count, offEntry.CostUSD, offEntry.InputTokens); ok {
+						out = append(out, row)
+					}
+				}
+				continue
+			}
+		}
 		dbEntry, hasDB := dbMap[mb.Model]
 		var inputTokens int64
 		var count int64
@@ -670,67 +848,12 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 			// 无 DB 时用订阅 cost 估算（cost/1e8 为 USD，无法得 tokens，仅作展示）
 			costUSD = float64(mb.Cost) / 1e8
 		}
-		// 若 DB 侧无 input，按订阅 quotaCost 反推（按当前模型单价，单价=cost/input，取 DB 平均或跳过）
 		if inputTokens == 0 {
-			// 尝试用 cost 与 DB 平均单价估算？此处留 0，过滤掉
 			continue
 		}
-		per100M := costUSD / float64(inputTokens) * 1e8
-		quotaCostUSD := float64(mb.QuotaCost) / 1e8
-		// 周期额度取文档/订阅的每模型每月配额（更准确的 $30/$15 等），而非当前已用的 quotaCost
-		quotaMu.RLock()
-		q := currentQuota
-		quotaMu.RUnlock()
-		if q.FiveHour == 0 {
-			q = quota.Default
+		if row, ok := buildRow(mb.Model, count, costUSD, inputTokens); ok {
+			out = append(out, row)
 		}
-		monthlyQuotaUSD := q.GetPerModel(mb.Model) // 如 deepseek-v4-flash $30
-		// 满额 tokens = 额度 / 单价（与文档口径一致）
-		var maxMonthly, maxWeekly, max5h int64
-		if per100M > 0 {
-			maxMonthly = int64(monthlyQuotaUSD / per100M * 1e8)
-			// 周/5h 按全局 token 限额比例折算，保持与订阅周期一致
-			if limitMonthly > 0 {
-				maxWeekly = int64(float64(maxMonthly) * float64(limitWeekly) / float64(limitMonthly))
-				max5h = int64(float64(maxMonthly) * float64(limit5h) / float64(limitMonthly))
-			} else {
-				maxWeekly = int64(q.Weekly / per100M * 1e8)
-				max5h = int64(q.FiveHour / per100M * 1e8)
-			}
-		}
-		// 已用占比以实际成本/额度为准，与订阅侧 contributionPercent 数值一致（cost 2.07/30 == quotaCost 4.15/60）
-		usedPct := float64(costUSD) / monthlyQuotaUSD * 100
-		if mb.ContributionPercent > 0 && monthlyQuotaUSD > 0 {
-			// 保持与订阅页面一致：优先使用 DB 成本/额度，若订阅侧 contribution 与之偏差过大则以订阅侧为准
-			// 此处 cost/额度 与 quotaCost/全局额度 数值相同（6.9%），直接复用 cost/额度
-			_ = mb.ContributionPercent
-		}
-		tokensPer1USD := int64(0)
-		if costUSD > 0 {
-			tokensPer1USD = int64(float64(inputTokens) / costUSD)
-		}
-		tokensPer100Calls := int64(0)
-		if count > 0 {
-			tokensPer100Calls = inputTokens * 100 / count
-		}
-		// 订阅侧 quotaCost 用于展示实际计入配额的成本，但“周期额度”列展示每模型限额
-		_ = quotaCostUSD
-		out = append(out, QuotaRow{
-			Model:            mb.Model,
-			Count:            count,
-			CostUSD:          costUSD,
-			InputTokens:      inputTokens,
-			Per100M:          per100M,
-			QuotaUSD:         monthlyQuotaUSD,
-			MaxTokens5h:      max5h,
-			MaxTokensWeekly:  maxWeekly,
-			MaxTokensMonthly: maxMonthly,
-			UsedPercent:      usedPct,
-			RemainingTokens:  maxMonthly - inputTokens,
-			RemainingUSD:     monthlyQuotaUSD - costUSD,
-			TokensPer1USD:    tokensPer1USD,
-			TokensPer100Calls: tokensPer100Calls,
-		})
 	}
 	// 按已用占比降序，便于表格突出高消耗模型
 	sort.Slice(out, func(i, j int) bool { return out[i].UsedPercent > out[j].UsedPercent })
