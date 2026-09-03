@@ -70,7 +70,7 @@ func main() {
 		"ModelRows":      modelRows,
 		"MonthModelRows": monthModelRows,
 		"CacheRows":      cacheRows,
-		"DailyRows":      dailyRows,
+		"DailyRows":      store.WithDailySubtotals(dailyRows),
 		"PeakRows":       peakRows,
 		// chart JSON
 		"MonthLabelsJSON": mustJSON(monthLabels),
@@ -194,20 +194,13 @@ func cacheChartData(rows []struct {
 	}
 	return l, inp, rd, wr
 }
-func dailyChartData(rows []struct {
-	Day, Model      string
-	Count           int64
-	CostUSD         float64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CacheRead       int64
-	CacheWrite5m    int64
-	CacheWrite1h    int64
-}) ([]string, []float64) {
+func dailyChartData(rows []store.DailyModelRow) ([]string, []float64) {
 	m := map[string]float64{}
 	var order []string
 	for _, r := range rows {
+		if r.IsSubtotal {
+			continue
+		}
 		if _, ok := m[r.Day]; !ok {
 			order = append(order, r.Day)
 		}
@@ -332,7 +325,7 @@ tr:hover td{background:#fafafa}
 <div id="tab-daily" class="tab"><div class="card"><h2>{{.DailyMonth}} 每日成本</h2><canvas id="chart-daily"></canvas></div>
 <div class="card"><h2>{{.DailyMonth}} 每日 × 模型 <span class="badge">含每日小计</span></h2>
 <table><thead><tr><th onclick="sortTable(this)">日期</th><th onclick="sortTable(this)">模型</th><th onclick="sortTable(this)">调用次数</th><th onclick="sortTable(this)">成本</th><th onclick="sortTable(this)">每亿输入tok</th><th onclick="sortTable(this)">输入tokens</th><th onclick="sortTable(this)">缓存读取</th><th onclick="sortTable(this)">缓存写入</th><th onclick="sortTable(this)">输出tokens</th></tr></thead><tbody>
-{{range .DailyRows}}<tr><td>{{.Day}}</td><td><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td></tr>{{end}}
+{{range .DailyRows}}{{if .IsSubtotal}}<tr class="subtotal"><td>{{.Day}} 小计</td><td>—</td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td></tr>{{else}}<tr><td>{{.Day}}</td><td><code>{{.Model}}</code></td><td data-sort="{{.Count}}">{{thousands .Count}}</td><td data-sort="{{.CostUSD}}">{{thousandsF .CostUSD}}</td><td>{{per100MIn .CostUSD .InputTokens}}</td><td data-sort="{{.InputTokens}}">{{thousands .InputTokens}}</td><td data-sort="{{.CacheRead}}">{{thousands .CacheRead}}</td><td data-sort="{{add .CacheWrite5m .CacheWrite1h}}">{{thousands (add .CacheWrite5m .CacheWrite1h)}}</td><td data-sort="{{.OutputTokens}}">{{thousands .OutputTokens}}</td></tr>{{end}}{{end}}
 </tbody></table></div></div>
 
 <!-- 峰谷 -->

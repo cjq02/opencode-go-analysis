@@ -243,17 +243,7 @@ func renderCache(b *strings.Builder, rows []struct {
 	}
 }
 
-func renderDailyModel(b *strings.Builder, rows []struct {
-	Day, Model       string
-	Count            int64
-	CostUSD          float64
-	InputTokens      int64
-	OutputTokens     int64
-	ReasoningTokens  int64
-	CacheRead        int64
-	CacheWrite5m     int64
-	CacheWrite1h     int64
-}) {
+func renderDailyModel(b *strings.Builder, rows []store.DailyModelRow) {
 	b.WriteString(fmt.Sprintf("## %s 每日 x 模型统计\n\n", rows[0].Day[:7]))
 	b.WriteString("| 日期 | 模型 | 调用次数 | 成本(USD) | 每亿输入tok($) | 输入tokens | 缓存读取 | 缓存写入 | 输出tokens | 推理tokens |\n")
 	b.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
@@ -271,6 +261,9 @@ func renderDailyModel(b *strings.Builder, rows []struct {
 			thousands(sOut), thousands(sReason))
 	}
 	for _, r := range rows {
+		if r.IsSubtotal {
+			continue
+		}
 		if r.Day != curDay {
 			flush()
 			curDay = r.Day

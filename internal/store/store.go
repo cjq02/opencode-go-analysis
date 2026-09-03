@@ -496,18 +496,23 @@ GROUP BY month ORDER BY month DESC`, workspaceID)
 	return out, rows.Err()
 }
 
+// DailyModelRow 每天x模型分组统计行，IsSubtotal 为 true 时表示某日小计行
+// （Model 为空，各项为当日汇总）。
+type DailyModelRow struct {
+	Day, Model       string
+	Count            int64
+	CostUSD          float64
+	InputTokens      int64
+	OutputTokens     int64
+	ReasoningTokens  int64
+	CacheRead        int64
+	CacheWrite5m     int64
+	CacheWrite1h     int64
+	IsSubtotal       bool
+}
+
 // DailyModelStats 按指定月份(YYYY-MM)的每天x模型分组统计
-func (s *Store) DailyModelStats(ctx context.Context, workspaceID, monthPrefix string) ([]struct {
-	Day, Model      string
-	Count           int64
-	CostUSD         float64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CacheRead       int64
-	CacheWrite5m    int64
-	CacheWrite1h    int64
-}, error) {
+func (s *Store) DailyModelStats(ctx context.Context, workspaceID, monthPrefix string) ([]DailyModelRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT strftime('%Y-%m-%d', time_created/1000, 'unixepoch') AS day,
        model,
@@ -525,29 +530,9 @@ GROUP BY day, model ORDER BY day DESC, 3 DESC`, workspaceID, monthPrefix)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []struct {
-		Day, Model      string
-		Count           int64
-		CostUSD         float64
-		InputTokens     int64
-		OutputTokens    int64
-		ReasoningTokens int64
-		CacheRead       int64
-		CacheWrite5m    int64
-		CacheWrite1h    int64
-	}
+	var out []DailyModelRow
 	for rows.Next() {
-		var r struct {
-			Day, Model      string
-			Count           int64
-			CostUSD         float64
-			InputTokens     int64
-			OutputTokens    int64
-			ReasoningTokens int64
-			CacheRead       int64
-			CacheWrite5m    int64
-			CacheWrite1h    int64
-		}
+		var r DailyModelRow
 		if err := rows.Scan(&r.Day, &r.Model, &r.Count, &r.CostUSD,
 			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens,
 			&r.CacheRead, &r.CacheWrite5m, &r.CacheWrite1h); err != nil {
@@ -556,6 +541,50 @@ GROUP BY day, model ORDER BY day DESC, 3 DESC`, workspaceID, monthPrefix)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// WithDailySubtotals 在每天x模型行之间插入每日小计行（IsSubtotal=true，紧随当日各模型行之后）。
+// 输入须按 day 聚合（如 DailyModelStats 的 day DESC 输出），空输入返回空。
+func WithDailySubtotals(rows []DailyModelRow) []DailyModelRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]DailyModelRow, 0, len(rows)+len(rows)/3+1)
+	var curDay string
+	var sCnt, sIn, sOut, sReason, sCacheR, sCacheW5, sCacheW1 int64
+	var sCost float64
+	flush := func() {
+		if curDay == "" {
+			return
+		}
+		out = append(out, DailyModelRow{
+			Day: curDay, Count: sCnt, CostUSD: sCost,
+			InputTokens: sIn, OutputTokens: sOut, ReasoningTokens: sReason,
+			CacheRead: sCacheR, CacheWrite5m: sCacheW5, CacheWrite1h: sCacheW1,
+			IsSubtotal: true,
+		})
+	}
+	for _, r := range rows {
+		if r.IsSubtotal {
+			continue
+		}
+		if r.Day != curDay {
+			flush()
+			curDay = r.Day
+			sCnt, sCost, sIn, sOut, sReason, sCacheR, sCacheW5, sCacheW1 = 0, 0, 0, 0, 0, 0, 0, 0
+		}
+		sCnt += r.Count
+		sCost += r.CostUSD
+		sIn += r.InputTokens
+		sOut += r.OutputTokens
+		sReason += r.ReasoningTokens
+		sCacheR += r.CacheRead
+		sCacheW5 += r.CacheWrite5m
+		sCacheW1 += r.CacheWrite1h
+		out = append(out, r)
+	}
+	flush()
+	return out
 }
 
 // DeepseekPeak 统计 deepseek 模型自 startDay(北京时间 YYYY-MM-DD) 起，

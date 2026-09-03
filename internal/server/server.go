@@ -302,6 +302,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	monthModelRows, _ := s.st.Query(ctx, s.ws)
 	cacheRows, _ := s.st.CacheStats(ctx, s.ws)
 	dailyRows, _ := s.st.DailyModelStats(ctx, s.ws, dailyMon)
+	dailyTableRows := store.WithDailySubtotals(dailyRows)
 	peakRows, _ := s.st.DeepseekPeak(ctx, s.ws, peakStart)
 	monthLabels, monthCosts, monthCounts := labelsCosts(monthRows)
 	modelLabels, modelCosts := modelLabelsCosts(modelRows)
@@ -388,7 +389,7 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"ModelRows":       modelRows,
 		"MonthModelRows":  monthModelRows,
 		"CacheRows":       cacheRows,
-		"DailyRows":       dailyRows,
+		"DailyRows":       dailyTableRows,
 		"PeakRows":        peakRows,
 		"Quota":           qForTpl,
 		"QuotaMonth":      quotaMonth,
@@ -1014,20 +1015,13 @@ func cacheChartData(rows []struct {
 	return l, inp, rd, wr
 }
 
-func dailyChartData(rows []struct {
-	Day, Model      string
-	Count           int64
-	CostUSD         float64
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	CacheRead       int64
-	CacheWrite5m    int64
-	CacheWrite1h    int64
-}) ([]string, []float64) {
+func dailyChartData(rows []store.DailyModelRow) ([]string, []float64) {
 	m := map[string]float64{}
 	var order []string
 	for _, r := range rows {
+		if r.IsSubtotal {
+			continue
+		}
 		if _, ok := m[r.Day]; !ok {
 			order = append(order, r.Day)
 		}
