@@ -18,6 +18,7 @@ import (
 	"opencode-go-analysis/internal/model"
 	"opencode-go-analysis/internal/quota"
 	"opencode-go-analysis/internal/store"
+	"opencode-go-analysis/internal/subscription"
 	"opencode-go-analysis/web"
 )
 
@@ -43,7 +44,7 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 启动时异步预取额度，保证首屏即可显示按模型额度；增量抓取时也会同步刷新
+	// 启动时异步预取额度与订阅周期
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
@@ -52,6 +53,28 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 			currentQuota = q
 			quotaMu.Unlock()
 			log.Printf("quota prefetch: 5h $%.0f / weekly $%.0f / monthly $%.0f, perModel %d", q.FiveHour, q.Weekly, q.Monthly, len(q.PerModel))
+		}
+		if ws != "" {
+			_ = envfile.Load(".env")
+			cookie := os.Getenv("OPENCODE_COOKIE")
+			if cookie != "" {
+				if sub, err := subscription.Fetch(ctx, cookie, ws); err == nil {
+					subMu.Lock()
+					currentSub = &sub
+					subMu.Unlock()
+					log.Printf("subscription prefetch: 5h %d/%d reset %ds, weekly %d/%d reset %ds, monthly %d/%d reset %ds", sub.Rolling.Usage, sub.Rolling.Limit, sub.Rolling.ResetInSec, sub.Weekly.Usage, sub.Weekly.Limit, sub.Weekly.ResetInSec, sub.Monthly.Usage, sub.Monthly.Limit, sub.Monthly.ResetInSec)
+				} else {
+					log.Printf("subscription prefetch failed: %v", err)
+				}
+				if bd, err := subscription.FetchBreakdown(ctx, cookie, ws, "monthly"); err == nil {
+					monthlyBDMu.Lock()
+					currentMonthlyBD = &bd
+					monthlyBDMu.Unlock()
+					log.Printf("subscription breakdown prefetch monthly: usage %d/%d (%.1f%%) rows %d", bd.Usage, bd.Limit, bd.UsagePercent, len(bd.Rows))
+				} else {
+					log.Printf("subscription breakdown prefetch failed: %v", err)
+				}
+			}
 		}
 	}()
 	tmpl := template.Must(template.New("site").Funcs(template.FuncMap{
@@ -90,6 +113,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/fetch", s.handleFetch)
 	mux.HandleFunc("/api/quota", s.handleQuota)
 	mux.HandleFunc("/api/quota/refresh", s.handleQuotaRefresh)
+	mux.HandleFunc("/api/subscription", s.handleSubscription)
+	mux.HandleFunc("/api/subscription/refresh", s.handleSubscriptionRefresh)
 	return mux
 }
 
@@ -161,7 +186,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	// 增量抓取时同步爬取最新额度
+	// 增量抓取时同步爬取最新额度与订阅周期
 	if q, err := quota.Fetch(ctx); err == nil {
 		quotaMu.Lock()
 		currentQuota = q
@@ -169,6 +194,22 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		log.Printf("quota refreshed on fetch: 5h $%.0f / weekly $%.0f / monthly $%.0f", q.FiveHour, q.Weekly, q.Monthly)
 	} else {
 		log.Printf("quota fetch on incremental failed, keep current: %v", err)
+	}
+	if sub, err := subscription.Fetch(ctx, cookie, s.ws); err == nil {
+		subMu.Lock()
+		currentSub = &sub
+		subMu.Unlock()
+		log.Printf("subscription refreshed on fetch: monthly %d/%d reset %ds", sub.Monthly.Usage, sub.Monthly.Limit, sub.Monthly.ResetInSec)
+	} else {
+		log.Printf("subscription fetch on incremental failed, keep current: %v", err)
+	}
+	if bd, err := subscription.FetchBreakdown(ctx, cookie, s.ws, "monthly"); err == nil {
+		monthlyBDMu.Lock()
+		currentMonthlyBD = &bd
+		monthlyBDMu.Unlock()
+		log.Printf("subscription breakdown refreshed: monthly %d/%d rows %d", bd.Usage, bd.Limit, len(bd.Rows))
+	} else {
+		log.Printf("subscription breakdown refresh failed: %v", err)
 	}
 	known, err := s.st.AllIDs(ctx, s.ws)
 	if err != nil {
@@ -214,6 +255,12 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 var currentQuota = quota.Default
 var quotaMu sync.RWMutex
 
+var currentSub *subscription.Info
+var subMu sync.RWMutex
+
+var currentMonthlyBD *subscription.Breakdown
+var monthlyBDMu sync.RWMutex
+
 type QuotaRow struct {
 	Model            string
 	Count            int64
@@ -228,17 +275,19 @@ type QuotaRow struct {
 	RemainingTokens  int64
 	RemainingUSD     float64
 	TokensPer1USD    int64 // $1 可使用 tokens
+	TokensPer100Calls int64 // 每百次消耗 tokens = Input / Count *100
 }
 
 type QuotaSummary struct {
-	TotalCount       int64
-	TotalCost        float64
-	TotalQuotaUSD    float64
-	RemainingUSD     float64
-	TotalInput       int64
-	TotalMaxMonthly  int64
-	RemainingTokens  int64
-	UsedPercent      float64
+	TotalCount          int64
+	TotalCost           float64
+	TotalQuotaUSD       float64
+	RemainingUSD        float64
+	TotalInput          int64
+	TotalMaxMonthly     int64
+	RemainingTokens     int64
+	UsedPercent         float64
+	TokensPer100Calls int64
 }
 
 // buildData 组装模板数据（表格降序，图表升序）
@@ -264,9 +313,62 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	if qForTpl.FiveHour == 0 {
 		qForTpl = quota.Default
 	}
-	quotaMonth, quotaRows := quotaEstimate(monthRows, monthModelRows)
+	subMu.RLock()
+	subForTpl := currentSub
+	subMu.RUnlock()
+	var quotaMonth string
+	var quotaRows []QuotaRow
+	var quotaCycleLabel string
+	var subCycleStart, subCycleEnd string
+	monthlyBDMu.RLock()
+	bdForTpl := currentMonthlyBD
+	monthlyBDMu.RUnlock()
+	if subForTpl != nil && subForTpl.Monthly.Limit > 0 {
+		fetchedAt := subForTpl.FetchedAt
+		if fetchedAt.IsZero() {
+			fetchedAt = time.Now()
+		}
+		monthlyStart := subscription.CycleStart(fetchedAt, subscription.PeriodMonthly, subForTpl.Monthly.ResetInSec)
+		endMs := monthlyStart + subscription.PeriodMonthly*1000
+		subCycleStart = time.UnixMilli(monthlyStart).Format("2006-01-02")
+		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
+		quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
+		if cycleRows, err := s.st.CycleModelStats(ctx, s.ws, monthlyStart); err == nil && len(cycleRows) > 0 {
+			if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
+				quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, cycleRows, quotaCycleLabel)
+			} else {
+				quotaMonth, quotaRows = quotaEstimateCycle(cycleRows, quotaCycleLabel)
+			}
+		} else {
+			quotaMonth, quotaRows = quotaEstimate(monthRows, monthModelRows)
+			quotaCycleLabel = ""
+		}
+	} else {
+		quotaMonth, quotaRows = quotaEstimate(monthRows, monthModelRows)
+	}
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
 	quotaSummary := buildQuotaSummary(quotaRows, qForTpl)
+	if bdForTpl != nil && bdForTpl.Limit > 0 {
+		var totalInput int64
+		for _, r := range quotaRows {
+			totalInput += r.InputTokens
+		}
+		quotaSummary.TotalInput = totalInput
+		quotaSummary.TotalMaxMonthly = bdForTpl.Limit
+		quotaSummary.UsedPercent = bdForTpl.UsagePercent
+		quotaSummary.RemainingTokens = bdForTpl.Limit - bdForTpl.Usage
+		// 覆盖 TotalCost/Quota 以 token 维度展示，USD 维度保留 docs 换算但此处用 quotaCost/1e8 便于对比
+		var totalQuotaCostUSD float64
+		for _, mb := range bdForTpl.Rows {
+			totalQuotaCostUSD += float64(mb.QuotaCost) / 1e8
+		}
+		quotaSummary.TotalCost = totalQuotaCostUSD
+		quotaSummary.TotalQuotaUSD = float64(bdForTpl.Limit) / 1e8
+		quotaSummary.RemainingUSD = quotaSummary.TotalQuotaUSD - quotaSummary.TotalCost
+		if quotaSummary.TotalCount > 0 {
+			quotaSummary.TokensPer100Calls = quotaSummary.TotalInput * 100 / quotaSummary.TotalCount
+		}
+	}
 	shareTop3, shareCheapest := buildShareData(quotaRows)
 	return map[string]any{
 		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
@@ -288,6 +390,11 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		"QuotaSummary":    quotaSummary,
 		"ShareTop3":       shareTop3,
 		"ShareCheapest":   shareCheapest,
+		"QuotaCycleLabel": quotaCycleLabel,
+		"Subscription":    subForTpl,
+		"SubCycleStart":   subCycleStart,
+		"SubCycleEnd":     subCycleEnd,
+		"MonthlyBD":       bdForTpl,
 		"MonthLabelsJSON": mustJSON(monthLabels),
 		"MonthCostsJSON":  mustJSON(monthCosts),
 		"MonthCountsJSON": mustJSON(monthCounts),
@@ -339,6 +446,43 @@ func (s *Server) handleQuotaRefresh(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(q)
 }
 
+func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request) {
+	subMu.RLock()
+	sub := currentSub
+	subMu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
+	if sub == nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "not fetched"})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(sub)
+}
+
+func (s *Server) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_ = envfile.Load(".env")
+	cookie := os.Getenv("OPENCODE_COOKIE")
+	if cookie == "" {
+		http.Error(w, `{"error":"OPENCODE_COOKIE not set"}`, http.StatusInternalServerError)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	sub, err := subscription.Fetch(ctx, cookie, s.ws)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	subMu.Lock()
+	currentSub = &sub
+	subMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sub)
+}
+
 func quotaEstimate(monthRows []struct {
 	Month           string
 	Count           int64
@@ -386,6 +530,10 @@ func quotaEstimate(monthRows []struct {
 			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
 		}
 		tokensPer1USD := int64(float64(r.InputTokens) / r.CostUSD)
+		tokensPer100Calls := int64(0)
+		if r.Count > 0 {
+			tokensPer100Calls = r.InputTokens * 100 / r.Count
+		}
 		out = append(out, QuotaRow{
 			Model:            r.Model,
 			Count:            r.Count,
@@ -400,9 +548,193 @@ func quotaEstimate(monthRows []struct {
 			RemainingTokens:  maxMonthly - r.InputTokens,
 			RemainingUSD:     monthlyQuota - r.CostUSD,
 			TokensPer1USD:    tokensPer1USD,
+			TokensPer100Calls: tokensPer100Calls,
 		})
 	}
 	return latest, out
+}
+
+func quotaEstimateCycle(cycleRows []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}, label string) (string, []QuotaRow) {
+	var out []QuotaRow
+	for _, r := range cycleRows {
+		if r.InputTokens <= 0 || r.CostUSD <= 0 {
+			continue
+		}
+		per100M := r.CostUSD / float64(r.InputTokens) * 1e8
+		quotaMu.RLock()
+		q := currentQuota
+		quotaMu.RUnlock()
+		if q.FiveHour == 0 {
+			q = quota.Default
+		}
+		monthlyQuota := q.GetPerModel(r.Model)
+		max5h := int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour)
+		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * q.Weekly)
+		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
+		usedPct := 0.0
+		if maxMonthly > 0 {
+			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
+		}
+		tokensPer1USD := int64(float64(r.InputTokens) / r.CostUSD)
+		tokensPer100Calls := int64(0)
+		if r.Count > 0 {
+			tokensPer100Calls = r.InputTokens * 100 / r.Count
+		}
+		out = append(out, QuotaRow{
+			Model:            r.Model,
+			Count:            r.Count,
+			CostUSD:          r.CostUSD,
+			InputTokens:      r.InputTokens,
+			Per100M:          per100M,
+			QuotaUSD:         monthlyQuota,
+			MaxTokens5h:      max5h,
+			MaxTokensWeekly:  maxWeekly,
+			MaxTokensMonthly: maxMonthly,
+			UsedPercent:      usedPct,
+			RemainingTokens:  maxMonthly - r.InputTokens,
+			RemainingUSD:     monthlyQuota - r.CostUSD,
+			TokensPer1USD:    tokensPer1USD,
+			TokensPer100Calls: tokensPer100Calls,
+		})
+	}
+	return label, out
+}
+
+func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}, label string) (string, []QuotaRow) {
+	if bd == nil || len(bd.Rows) == 0 {
+		return quotaEstimateCycle(cycleRows, label)
+	}
+	// 建 DB cycle 映射以取 InputTokens/Count（订阅侧已给出 cost/quotaCost）
+	dbMap := map[string]struct {
+		Count       int64
+		InputTokens int64
+		CostUSD     float64
+	}{}
+	for _, r := range cycleRows {
+		dbMap[r.Model] = struct {
+			Count       int64
+			InputTokens int64
+			CostUSD     float64
+		}{r.Count, r.InputTokens, r.CostUSD}
+	}
+	subMu.RLock()
+	sub := currentSub
+	subMu.RUnlock()
+	// 取全局 token 限额（来自订阅页），用于 5h/周/月的满额换算
+	var limit5h, limitWeekly, limitMonthly int64 = 1200000000, 3000000000, 6000000000
+	if sub != nil {
+		if sub.Rolling.Limit > 0 {
+			limit5h = sub.Rolling.Limit
+		}
+		if sub.Weekly.Limit > 0 {
+			limitWeekly = sub.Weekly.Limit
+		}
+		if sub.Monthly.Limit > 0 {
+			limitMonthly = sub.Monthly.Limit
+		}
+	}
+	if bd.Limit > 0 {
+		limitMonthly = bd.Limit
+	}
+	var out []QuotaRow
+	for _, mb := range bd.Rows {
+		dbEntry, hasDB := dbMap[mb.Model]
+		var inputTokens int64
+		var count int64
+		var costUSD float64
+		if hasDB {
+			inputTokens = dbEntry.InputTokens
+			count = dbEntry.Count
+			costUSD = dbEntry.CostUSD
+		} else {
+			// 无 DB 时用订阅 cost 估算（cost/1e8 为 USD，无法得 tokens，仅作展示）
+			costUSD = float64(mb.Cost) / 1e8
+		}
+		// 若 DB 侧无 input，按订阅 quotaCost 反推（按当前模型单价，单价=cost/input，取 DB 平均或跳过）
+		if inputTokens == 0 {
+			// 尝试用 cost 与 DB 平均单价估算？此处留 0，过滤掉
+			continue
+		}
+		per100M := costUSD / float64(inputTokens) * 1e8
+		quotaCostUSD := float64(mb.QuotaCost) / 1e8
+		// 周期额度取文档/订阅的每模型每月配额（更准确的 $30/$15 等），而非当前已用的 quotaCost
+		quotaMu.RLock()
+		q := currentQuota
+		quotaMu.RUnlock()
+		if q.FiveHour == 0 {
+			q = quota.Default
+		}
+		monthlyQuotaUSD := q.GetPerModel(mb.Model) // 如 deepseek-v4-flash $30
+		// 满额 tokens = 额度 / 单价（与文档口径一致）
+		var maxMonthly, maxWeekly, max5h int64
+		if per100M > 0 {
+			maxMonthly = int64(monthlyQuotaUSD / per100M * 1e8)
+			// 周/5h 按全局 token 限额比例折算，保持与订阅周期一致
+			if limitMonthly > 0 {
+				maxWeekly = int64(float64(maxMonthly) * float64(limitWeekly) / float64(limitMonthly))
+				max5h = int64(float64(maxMonthly) * float64(limit5h) / float64(limitMonthly))
+			} else {
+				maxWeekly = int64(q.Weekly / per100M * 1e8)
+				max5h = int64(q.FiveHour / per100M * 1e8)
+			}
+		}
+		// 已用占比以实际成本/额度为准，与订阅侧 contributionPercent 数值一致（cost 2.07/30 == quotaCost 4.15/60）
+		usedPct := float64(costUSD) / monthlyQuotaUSD * 100
+		if mb.ContributionPercent > 0 && monthlyQuotaUSD > 0 {
+			// 保持与订阅页面一致：优先使用 DB 成本/额度，若订阅侧 contribution 与之偏差过大则以订阅侧为准
+			// 此处 cost/额度 与 quotaCost/全局额度 数值相同（6.9%），直接复用 cost/额度
+			_ = mb.ContributionPercent
+		}
+		tokensPer1USD := int64(0)
+		if costUSD > 0 {
+			tokensPer1USD = int64(float64(inputTokens) / costUSD)
+		}
+		tokensPer100Calls := int64(0)
+		if count > 0 {
+			tokensPer100Calls = inputTokens * 100 / count
+		}
+		// 订阅侧 quotaCost 用于展示实际计入配额的成本，但“周期额度”列展示每模型限额
+		_ = quotaCostUSD
+		out = append(out, QuotaRow{
+			Model:            mb.Model,
+			Count:            count,
+			CostUSD:          costUSD,
+			InputTokens:      inputTokens,
+			Per100M:          per100M,
+			QuotaUSD:         monthlyQuotaUSD,
+			MaxTokens5h:      max5h,
+			MaxTokensWeekly:  maxWeekly,
+			MaxTokensMonthly: maxMonthly,
+			UsedPercent:      usedPct,
+			RemainingTokens:  maxMonthly - inputTokens,
+			RemainingUSD:     monthlyQuotaUSD - costUSD,
+			TokensPer1USD:    tokensPer1USD,
+			TokensPer100Calls: tokensPer100Calls,
+		})
+	}
+	// 按已用占比降序，便于表格突出高消耗模型
+	sort.Slice(out, func(i, j int) bool { return out[i].UsedPercent > out[j].UsedPercent })
+	return label, out
 }
 
 func quotaChartData(rows []QuotaRow) ([]string, []int64, []int64, []int64) {
@@ -467,6 +799,9 @@ func buildQuotaSummary(rows []QuotaRow, q quota.Quota) QuotaSummary {
 	}
 	s.RemainingUSD = s.TotalQuotaUSD - s.TotalCost
 	s.RemainingTokens = s.TotalMaxMonthly - s.TotalInput
+	if s.TotalCount > 0 {
+		s.TokensPer100Calls = s.TotalInput * 100 / s.TotalCount
+	}
 	return s
 }
 

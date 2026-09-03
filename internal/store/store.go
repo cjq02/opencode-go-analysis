@@ -233,6 +233,65 @@ GROUP BY month, model ORDER BY month DESC, 3 DESC`, workspaceID)
 	return out, rows.Err()
 }
 
+// CycleModelStats 按订阅周期窗口（sinceMs 毫秒）分组统计 per-model
+func (s *Store) CycleModelStats(ctx context.Context, workspaceID string, sinceMs int64) ([]struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT model,
+       COUNT(*),
+       SUM(cost_raw)/1e8,
+       SUM(input_tokens + cache_read_tokens + cache_write_5m + cache_write_1h),
+       SUM(output_tokens),
+       SUM(reasoning_tokens),
+       SUM(cache_read_tokens),
+       SUM(cache_write_5m),
+       SUM(cache_write_1h)
+ FROM usage_records WHERE workspace_id = ? AND time_created >= ?
+ GROUP BY model ORDER BY 2 DESC`, workspaceID, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Model           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
+	}
+	for rows.Next() {
+		var r struct {
+			Model           string
+			Count           int64
+			CostUSD         float64
+			InputTokens     int64
+			OutputTokens    int64
+			ReasoningTokens int64
+			CacheRead       int64
+			CacheWrite5m    int64
+			CacheWrite1h    int64
+		}
+		if err := rows.Scan(&r.Model, &r.Count, &r.CostUSD, &r.InputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CacheRead, &r.CacheWrite5m, &r.CacheWrite1h); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // QueryRow 执行单值聚合查询（agg 为 MIN/MAX 等），写入 dest
 func (s *Store) QueryRow(ctx context.Context, workspaceID, agg string, dest *int64) error {
 	return s.db.QueryRowContext(ctx,
