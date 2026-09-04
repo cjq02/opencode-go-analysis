@@ -82,6 +82,7 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 		"thousands":  format.Thousands,
 		"thousandsF": format.ThousandsF,
 		"per100MIn":  format.Per100MIn,
+		"compact":    format.CompactTokens,
 		"add":        func(a, b int64) int64 { return a + b },
 		"cachePct": func(inp, rd, w5, w1 int64) float64 {
 			c := rd + w5 + w1
