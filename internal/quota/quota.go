@@ -23,7 +23,40 @@ type Quota struct {
 	PerModel map[string]float64 `json:"perModel"`
 }
 
-var Default = Quota{FiveHour: 12, Weekly: 30, Monthly: 60, Source: "hardcoded", PerModel: map[string]float64{}}
+var Default = Quota{FiveHour: 12, Weekly: 30, Monthly: 60, Source: "hardcoded", PerModel: defaultPerModelQuotas}
+
+// defaultPerModelQuotas 文档表格的硬编码兜底（与 docs/zh-cn/go/ 每月限制列一致），
+// 避免文档抓取失败时 GetPerModel 回退到 $60 导致“额度都变成 60”。
+var defaultPerModelQuotas = map[string]float64{
+	"omen-alpha":                 100,
+	"glm-5.3-flash":              60,
+	"glm-5.3":                    15,
+	"glm-5.2":                    60,
+	"glm-5.1":                    60,
+	"kimi-k3":                    15,
+	"kimi-k2.7-code":             60,
+	"kimi-k2.6":                  60,
+	"longcat-2.0":                60,
+	"mimo-v2.5":                  60,
+	"mimo-v2.5-pro":              15,
+	"minimax-m3":                 60,
+	"minimax-m2.7":               60,
+	"minimax-m2.5":               60,
+	"muse-spark-1.3-contributor": 60,
+	"muse-spark-1.2-contributor": 60,
+	"qwen3.8-max":                15,
+	"qwen3.8-flash":              30,
+	"qwen3.7-max":                30,
+	"qwen3.7-plus":               60,
+	"qwen3.6-plus":               60,
+	"deepseek-v4-pro":            15,
+	"deepseek-v4-flash":          30,
+	"deepseek-v4-flash-vision-exp": 15,
+	"hy4-preview":                30,
+	"hy3":                        60,
+	"grok-4.6":                   15,
+	"gpt-5.6-luna":               15,
+}
 
 // Fetch 爬取文档解析额度，失败返回 error，调用方可回退 Default
 func Fetch(ctx context.Context) (Quota, error) {
@@ -48,30 +81,49 @@ func Fetch(ctx context.Context) (Quota, error) {
 var (
 	re5h     = regexp.MustCompile(`5\s*小时限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
 	reWeekly = regexp.MustCompile(`每周限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
-	reMonthly= regexp.MustCompile(`每月限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
+	reMonthly = regexp.MustCompile(`每月限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
+	// 新版文档格式：<li><strong>5 小时限制</strong> — $12 的使用额度</li>
+	// 必须要求 </strong> 避免误匹配表头 <th>每月限制</th> 到首个价格 $0.20
+	re5hNew     = regexp.MustCompile(`5\s*小时限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
+	reWeeklyNew = regexp.MustCompile(`每周限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
+	reMonthlyNew = regexp.MustCompile(`每月限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
 )
 
+func findQuota(reNew, reOld *regexp.Regexp, html string) string {
+	if m := reNew.FindStringSubmatch(html); m != nil {
+		return m[1]
+	}
+	if m := reOld.FindStringSubmatch(html); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 func Parse(html string) (Quota, error) {
-	m5 := re5h.FindStringSubmatch(html)
-	mW := reWeekly.FindStringSubmatch(html)
-	mM := reMonthly.FindStringSubmatch(html)
-	if m5 == nil || mW == nil || mM == nil {
+	s5 := findQuota(re5hNew, re5h, html)
+	sW := findQuota(reWeeklyNew, reWeekly, html)
+	sM := findQuota(reMonthlyNew, reMonthly, html)
+	if s5 == "" || sW == "" || sM == "" {
 		return Quota{}, fmt.Errorf("parse quota failed")
 	}
 	var q Quota
-	fmt.Sscan(m5[1], &q.FiveHour)
-	fmt.Sscan(mW[1], &q.Weekly)
-	fmt.Sscan(mM[1], &q.Monthly)
+	fmt.Sscan(s5, &q.FiveHour)
+	fmt.Sscan(sW, &q.Weekly)
+	fmt.Sscan(sM, &q.Monthly)
 	q.Source = docsURL
 	q.FetchedAt = time.Now()
 	q.PerModel = parsePerModelQuotas(html)
+	if len(q.PerModel) == 0 {
+		q.PerModel = defaultPerModelQuotas
+	}
 	return q, nil
 }
 
 func parsePerModelQuotas(html string) map[string]float64 {
 	// 匹配“使用额度”列所在表格：提取所有 <tr><td>模型</td>...<td>$XX</td></tr>
 	// 简化：全局匹配 <td>模型名</td> ... <td>$数字</td> 连续 6 列的表格
-	reRow := regexp.MustCompile(`<tr>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>\$([0-9]+(?:\.[0-9]+)?)\s*</td>`)
+	// 末列兼容 <td><strong>$60</strong></td> 新版格式
+	reRow := regexp.MustCompile(`<tr>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>(?:<[^>]+>)*\$([0-9]+(?:\.[0-9]+)?)(?:<[^>]+>)*\s*</td>`)
 	matches := reRow.FindAllStringSubmatch(html, -1)
 	out := map[string]float64{}
 	for _, m := range matches {

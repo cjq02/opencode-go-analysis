@@ -337,10 +337,13 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
 		quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
 		if cycleRows, err := s.st.CycleModelStats(ctx, s.ws, monthlyStart); err == nil && len(cycleRows) > 0 {
+			// 同一模型不同 ID 先归一（如 deepseek-flash → deepseek-v4.1-flash），
+			// 否则峰谷拆分时查不到对应项会漏拆，且明细表会出现两行。
+			cycleRows = mergeCycleRowsByCanonical(cycleRows)
 			// DeepSeek 按峰/谷拆分为两行（文档峰时：周一至周五 北京时间 09-12 / 14-18）
 			expandedCycleRows := cycleRows
 			if splitRows, err := s.st.CycleDeepseekSplit(ctx, s.ws, monthlyStart); err == nil && len(splitRows) > 0 {
-				expandedCycleRows = expandCycleRowsWithPeak(cycleRows, splitRows)
+				expandedCycleRows = expandCycleRowsWithPeak(cycleRows, mergeSplitRowsByCanonical(splitRows))
 			}
 			if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
 				quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, expandedCycleRows, quotaCycleLabel)
@@ -514,11 +517,44 @@ func quotaEstimate(monthRows []struct {
 		return "", nil
 	}
 	latest := monthRows[0].Month
-	var out []QuotaRow
+	// 同一模型不同 ID 先归一合并（如 deepseek-flash → deepseek-v4.1-flash）
+	type mmRow = struct {
+		Month           string
+		Model           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
+	}
+	mergedMonth := make([]mmRow, 0, len(monthModelRows))
+	mmIdx := make(map[string]int, len(monthModelRows))
 	for _, r := range monthModelRows {
 		if r.Month != latest {
 			continue
 		}
+		key := canonicalModel(r.Model)
+		if i, ok := mmIdx[key]; ok {
+			m := &mergedMonth[i]
+			m.Count += r.Count
+			m.CostUSD += r.CostUSD
+			m.InputTokens += r.InputTokens
+			m.OutputTokens += r.OutputTokens
+			m.ReasoningTokens += r.ReasoningTokens
+			m.CacheRead += r.CacheRead
+			m.CacheWrite5m += r.CacheWrite5m
+			m.CacheWrite1h += r.CacheWrite1h
+			continue
+		}
+		mmIdx[key] = len(mergedMonth)
+		r.Model = key
+		mergedMonth = append(mergedMonth, r)
+	}
+	var out []QuotaRow
+	for _, r := range mergedMonth {
 		if r.InputTokens <= 0 || r.CostUSD <= 0 {
 			continue
 		}
@@ -565,6 +601,124 @@ func quotaEstimate(monthRows []struct {
 // isDeepSeekModel 是否为 DeepSeek 系模型（需区分峰/谷定价）
 func isDeepSeekModel(m string) bool {
 	return strings.HasPrefix(strings.ToLower(m), "deepseek")
+}
+
+// modelAliases 将已知的同一模型不同 ID 归一到 canonical ID。
+// 如订阅明细把 deepseek-flash 标为 "DeepSeek V4.1 Flash"，与 deepseek-v4.1-flash 实为同一模型。
+var modelAliases = map[string]string{
+	"deepseek-flash": "deepseek-v4.1-flash",
+}
+
+// splitPeakSuffix 拆分 DeepSeek 峰谷显示后缀 " (Peak)" / " (Off-Peak)"。
+func splitPeakSuffix(m string) (base, suffix string) {
+	if i := strings.LastIndex(m, " ("); i >= 0 && strings.HasSuffix(m, ")") {
+		return m[:i], m[i:]
+	}
+	return m, ""
+}
+
+// canonicalModel 返回归一后的模型 ID（保留峰谷后缀，匹配大小写不敏感）。
+func canonicalModel(m string) string {
+	base, suffix := splitPeakSuffix(m)
+	if alias, ok := modelAliases[strings.ToLower(strings.TrimSpace(base))]; ok {
+		return alias + suffix
+	}
+	return m
+}
+
+// mergeCycleRowsByCanonical 将周期聚合按 canonicalModel() 归一并合并（各项求和，保持首次出现顺序）。
+func mergeCycleRowsByCanonical(rows []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+}) []struct {
+	Model           string
+	Count           int64
+	CostUSD         float64
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CacheRead       int64
+	CacheWrite5m    int64
+	CacheWrite1h    int64
+} {
+	type row = struct {
+		Model           string
+		Count           int64
+		CostUSD         float64
+		InputTokens     int64
+		OutputTokens    int64
+		ReasoningTokens int64
+		CacheRead       int64
+		CacheWrite5m    int64
+		CacheWrite1h    int64
+	}
+	merged := make([]row, 0, len(rows))
+	idx := make(map[string]int, len(rows))
+	for _, r := range rows {
+		key := canonicalModel(r.Model)
+		if i, ok := idx[key]; ok {
+			m := &merged[i]
+			m.Count += r.Count
+			m.CostUSD += r.CostUSD
+			m.InputTokens += r.InputTokens
+			m.OutputTokens += r.OutputTokens
+			m.ReasoningTokens += r.ReasoningTokens
+			m.CacheRead += r.CacheRead
+			m.CacheWrite5m += r.CacheWrite5m
+			m.CacheWrite1h += r.CacheWrite1h
+			continue
+		}
+		idx[key] = len(merged)
+		r.Model = key
+		merged = append(merged, r)
+	}
+	return merged
+}
+
+// mergeSplitRowsByCanonical 将峰谷拆分行按 canonicalModel() 归一并合并（同一模型+峰谷项求和）。
+func mergeSplitRowsByCanonical(rows []struct {
+	Model       string
+	IsPeak      int64
+	Count       int64
+	CostUSD     float64
+	InputTokens int64
+}) []struct {
+	Model       string
+	IsPeak      int64
+	Count       int64
+	CostUSD     float64
+	InputTokens int64
+} {
+	type row = struct {
+		Model       string
+		IsPeak      int64
+		Count       int64
+		CostUSD     float64
+		InputTokens int64
+	}
+	merged := make([]row, 0, len(rows))
+	idx := make(map[string]int, len(rows))
+	for _, r := range rows {
+		key := canonicalModel(r.Model) + "\x00" + string(rune('0'+r.IsPeak))
+		if i, ok := idx[key]; ok {
+			m := &merged[i]
+			m.Count += r.Count
+			m.CostUSD += r.CostUSD
+			m.InputTokens += r.InputTokens
+			continue
+		}
+		idx[key] = len(merged)
+		r.Model = canonicalModel(r.Model)
+		merged = append(merged, r)
+	}
+	return merged
 }
 
 // expandCycleRowsWithPeak 将周期聚合中的 deepseek 行按峰/谷拆分为两行。
@@ -680,6 +834,7 @@ func quotaEstimateCycle(cycleRows []struct {
 	CacheWrite5m    int64
 	CacheWrite1h    int64
 }, label string) (string, []QuotaRow) {
+	cycleRows = mergeCycleRowsByCanonical(cycleRows)
 	var out []QuotaRow
 	for _, r := range cycleRows {
 		if r.InputTokens <= 0 || r.CostUSD <= 0 {
@@ -739,6 +894,8 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 	if bd == nil || len(bd.Rows) == 0 {
 		return quotaEstimateCycle(cycleRows, label)
 	}
+	// 防御性归一：调用方一般已在 buildData 归一，直接调用时也保证一致。
+	cycleRows = mergeCycleRowsByCanonical(cycleRows)
 	// 建 DB cycle 映射以取 InputTokens/Count（订阅侧已给出 cost/quotaCost）
 	dbMap := map[string]struct {
 		Count       int64
@@ -819,7 +976,28 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 		}, true
 	}
 	var out []QuotaRow
+	// 订阅明细可能对同一模型返回多行（如不同 multiplier 桶：
+	// glm-5.3-flash 曾同时出现 mult=2.0 与 mult=1.0 两行）。
+	// 先按 canonicalModel() 合并，否则满额预估表会出现两行完全相同的行
+	//（两行取同一份 DB 数据计算），deepseek 甚至会翻倍拆出 4 行。
+	merged := make([]subscription.ModelBreakdown, 0, len(bd.Rows))
+	idxByModel := make(map[string]int, len(bd.Rows))
 	for _, mb := range bd.Rows {
+		mb.Model = canonicalModel(mb.Model)
+		if i, ok := idxByModel[mb.Model]; ok {
+			m := &merged[i]
+			m.Cost += mb.Cost
+			m.QuotaCost += mb.QuotaCost
+			m.ContributionPercent += mb.ContributionPercent
+			if mb.Multiplier > m.Multiplier {
+				m.Multiplier = mb.Multiplier
+			}
+			continue
+		}
+		idxByModel[mb.Model] = len(merged)
+		merged = append(merged, mb)
+	}
+	for _, mb := range merged {
 		// DeepSeek 在 cycleRows 中已拆为 "(Peak)" / "(Off-Peak)" 两行，此处分别建行
 		if isDeepSeekModel(mb.Model) {
 			peakEntry, hasPeak := dbMap[mb.Model+" (Peak)"]
