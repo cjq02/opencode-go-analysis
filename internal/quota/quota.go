@@ -51,6 +51,9 @@ var defaultPerModelQuotas = map[string]float64{
 	"qwen3.6-plus":               60,
 	"deepseek-v4-pro":            15,
 	"deepseek-v4-flash":          30,
+	// deepseek-v4.1-flash 原价 $15，限时 4x 至 $60（文档标注 9 月 20 日结束）；
+	// 兜底取当前生效值，促销结束后以文档抓取为准。
+	"deepseek-v4.1-flash":          60,
 	"deepseek-v4-flash-vision-exp": 15,
 	"hy4-preview":                30,
 	"hy3":                        60,
@@ -120,24 +123,38 @@ func Parse(html string) (Quota, error) {
 }
 
 func parsePerModelQuotas(html string) map[string]float64 {
-	// 匹配“使用额度”列所在表格：提取所有 <tr><td>模型</td>...<td>$XX</td></tr>
-	// 简化：全局匹配 <td>模型名</td> ... <td>$数字</td> 连续 6 列的表格
-	// 末列兼容 <td><strong>$60</strong></td> 新版格式
-	reRow := regexp.MustCompile(`<tr>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>.*?</td>\s*<td[^>]*>(?:<[^>]+>)*\$([0-9]+(?:\.[0-9]+)?)(?:<[^>]+>)*\s*</td>`)
-	matches := reRow.FindAllStringSubmatch(html, -1)
+	// 先按行切分再逐行匹配：单元格里的 .*? 绝不能跨 </tr>，
+	// 否则遇到异形行（如 V4.1 的 <del>/<strong> 行）会跨行抓到别行的值毒化结果。
+	reTR := regexp.MustCompile(`(?s)<tr>(.*?)</tr>`)
+	// 限时加成行：末列形如 <del>$15</del> <strong>$60</strong>（如 DeepSeek V4.1 Flash 4x），
+	// 取 <strong> 中的当前生效值，优先于常规解析。
+	// 中间价格列用 [^<]*（纯文本），杜绝跨单元格/跨行。
+	reRowStrong := regexp.MustCompile(`\A\s*<td[^>]*>(.*?)</td>(?:\s*<td[^>]*>[^<]*</td>){4}\s*<td[^>]*>.*?<strong>\$([0-9]+(?:\.[0-9]+)?)</strong>.*?</td>`)
+	// 常规行：末列兼容 <td><strong>$60</strong></td> 新版格式。
+	reRow := regexp.MustCompile(`\A\s*<td[^>]*>(.*?)</td>(?:\s*<td[^>]*>[^<]*</td>){4}\s*<td[^>]*>(?:<[^>]+>)*\$([0-9]+(?:\.[0-9]+)?)(?:<[^>]+>)*\s*</td>`)
 	out := map[string]float64{}
-	for _, m := range matches {
+	collect := func(m []string) {
 		rawModel := stripTags(m[1])
 		val := m[2]
 		var usd float64
 		fmt.Sscan(val, &usd)
 		key := normalizeModel(rawModel)
 		if key == "" {
-			continue
+			return
 		}
-		// 同一模型多行（如 Off-Peak/Peak）取最大值或首值，这里取首值一致则覆盖无影响
+		// 同一模型多行（如 Off-Peak/Peak）取首值；加成行的生效值已优先写入，不被覆盖
 		if _, exists := out[key]; !exists {
 			out[key] = usd
+		}
+	}
+	for _, m := range reTR.FindAllStringSubmatch(html, -1) {
+		tr := m[1]
+		if mm := reRowStrong.FindStringSubmatch(tr); mm != nil {
+			collect(mm)
+			continue
+		}
+		if mm := reRow.FindStringSubmatch(tr); mm != nil {
+			collect(mm)
 		}
 	}
 	return out
