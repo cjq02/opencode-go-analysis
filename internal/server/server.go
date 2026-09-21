@@ -63,8 +63,10 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 					subMu.Lock()
 					currentSub = &sub
 					subMu.Unlock()
-					log.Printf("subscription prefetch: 24h %dtokens/$%.2f, 7d %dtokens/$%.2f, 30d %dtokens/$%.2f",
-						sub.Day.TotalTokens, sub.Day.CostUSD, sub.Weekly.TotalTokens, sub.Weekly.CostUSD, sub.Monthly.TotalTokens, sub.Monthly.CostUSD)
+					log.Printf("subscription prefetch: 5h $%.2f/$%.2f (%.1f%%), week $%.2f/$%.2f (%.1f%%), month $%.2f/$%.2f (%.1f%%)",
+						sub.FiveHour.UsedUSD, sub.FiveHour.LimitUSD, sub.FiveHour.UsedPercent,
+						sub.Weekly.UsedUSD, sub.Weekly.LimitUSD, sub.Weekly.UsedPercent,
+						sub.Monthly.UsedUSD, sub.Monthly.LimitUSD, sub.Monthly.UsedPercent)
 				} else {
 					log.Printf("subscription prefetch failed: %v", err)
 				}
@@ -202,7 +204,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		subMu.Lock()
 		currentSub = &sub
 		subMu.Unlock()
-		log.Printf("subscription refreshed on fetch: 30d %dtokens/$%.2f", sub.Monthly.TotalTokens, sub.Monthly.CostUSD)
+		log.Printf("subscription refreshed on fetch: month $%.2f/$%.2f (%.1f%%)", sub.Monthly.UsedUSD, sub.Monthly.LimitUSD, sub.Monthly.UsedPercent)
 	} else {
 		log.Printf("subscription fetch on incremental failed, keep current: %v", err)
 	}
@@ -332,10 +334,16 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	monthlyBDMu.RLock()
 	bdForTpl := currentMonthlyBD
 	monthlyBDMu.RUnlock()
-	if subForTpl != nil && (subForTpl.Monthly.Requests > 0 || (bdForTpl != nil && len(bdForTpl.Rows) > 0)) {
-		// 新版 console API 不再提供订阅周期重置时间，周期取 trailing 30d
+	if subForTpl != nil && subForTpl.Access() {
+		// 订阅月周期用官方 access.startsAt/endsAt；缺失时回退 trailing 30d
 		monthlyStart := time.Now().UnixMilli() - int64(subscription.PeriodMonthly)*1000
-		endMs := monthlyStart + subscription.PeriodMonthly*1000
+		endMs := time.Now().UnixMilli()
+		if !subForTpl.PeriodStart.IsZero() {
+			monthlyStart = subForTpl.PeriodStart.UnixMilli()
+		}
+		if !subForTpl.PeriodEnd.IsZero() {
+			endMs = subForTpl.PeriodEnd.UnixMilli()
+		}
 		subCycleStart = time.UnixMilli(monthlyStart).Format("2006-01-02")
 		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
 		quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
@@ -362,23 +370,43 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	}
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
 	quotaSummary := buildQuotaSummary(quotaRows, qForTpl)
-	if bdForTpl != nil && bdForTpl.Limit > 0 {
+	if subForTpl != nil && subForTpl.Access() {
+		// 已用占比以官方 Go 套餐月用量为准（与 /console/wrk_.../go 页一致）：
+		// usedMicroCents/limitMicroCents，均为 1e-8 美元。
 		var totalInput int64
 		for _, r := range quotaRows {
 			totalInput += r.InputTokens
 		}
 		quotaSummary.TotalInput = totalInput
-		quotaSummary.TotalMaxMonthly = bdForTpl.Limit
-		quotaSummary.UsedPercent = bdForTpl.UsagePercent
-		quotaSummary.RemainingTokens = bdForTpl.Limit - bdForTpl.Usage
-		// 覆盖 TotalCost/Quota 以 token 维度展示，USD 维度保留 docs 换算但此处用 quotaCost/1e8 便于对比
-		var totalQuotaCostUSD float64
-		for _, mb := range bdForTpl.Rows {
-			totalQuotaCostUSD += float64(mb.QuotaCost) / 1e8
+		quotaSummary.TotalQuotaUSD = subForTpl.Monthly.LimitUSD
+		quotaSummary.TotalCost = subForTpl.Monthly.UsedUSD
+		quotaSummary.UsedPercent = subForTpl.Monthly.UsedPercent
+		quotaSummary.RemainingUSD = subForTpl.Monthly.LimitUSD - subForTpl.Monthly.UsedUSD
+		if subForTpl.Monthly.UsedUSD > 0 && totalInput > 0 {
+			quotaSummary.TotalMaxMonthly = int64(float64(totalInput) / subForTpl.Monthly.UsedUSD * subForTpl.Monthly.LimitUSD)
 		}
-		quotaSummary.TotalCost = totalQuotaCostUSD
-		quotaSummary.TotalQuotaUSD = float64(bdForTpl.Limit) / 1e8
-		quotaSummary.RemainingUSD = quotaSummary.TotalQuotaUSD - quotaSummary.TotalCost
+		quotaSummary.RemainingTokens = quotaSummary.TotalMaxMonthly - totalInput
+		if quotaSummary.TotalCount > 0 {
+			quotaSummary.TokensPer100Calls = quotaSummary.TotalInput * 100 / quotaSummary.TotalCount
+		}
+	} else if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
+		// 无订阅状态时回退到官方 30d 明细成本 / 月额度
+		var totalInput int64
+		for _, r := range quotaRows {
+			totalInput += r.InputTokens
+		}
+		quotaSummary.TotalInput = totalInput
+		quotaSummary.TotalQuotaUSD = qForTpl.Monthly
+		officialCost := float64(bdForTpl.Usage) / 1e8
+		quotaSummary.TotalCost = officialCost
+		if quotaSummary.TotalQuotaUSD > 0 {
+			quotaSummary.UsedPercent = officialCost / quotaSummary.TotalQuotaUSD * 100
+		}
+		quotaSummary.RemainingUSD = quotaSummary.TotalQuotaUSD - officialCost
+		if officialCost > 0 && totalInput > 0 {
+			quotaSummary.TotalMaxMonthly = int64(float64(totalInput) / officialCost * quotaSummary.TotalQuotaUSD)
+		}
+		quotaSummary.RemainingTokens = quotaSummary.TotalMaxMonthly - totalInput
 		if quotaSummary.TotalCount > 0 {
 			quotaSummary.TokensPer100Calls = quotaSummary.TotalInput * 100 / quotaSummary.TotalCount
 		}

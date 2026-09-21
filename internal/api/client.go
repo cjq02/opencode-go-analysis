@@ -279,3 +279,52 @@ func (c *Client) FetchSummary(timeRange string) (Summary, error) {
 	}
 	return s, nil
 }
+
+// ---- Go 订阅状态（Go 页面顶部 5h/周/月 用量表）----
+
+// GoMeter 单个用量窗口。金额单位为 microcents（1e-8 美元），与 cost_raw 同单位。
+// month 窗口没有 startsAt/resetsAt（月周期取 Access.StartsAt/EndsAt）。
+type GoMeter struct {
+	StartsAt        string  `json:"startsAt"`
+	ResetsAt        string  `json:"resetsAt"`
+	LimitMicroCents flexInt `json:"limitMicroCents"`
+	UsedMicroCents  flexInt `json:"usedMicroCents"`
+}
+
+// GoMeters 三档用量窗口
+type GoMeters struct {
+	FiveHour GoMeter `json:"fiveHour"`
+	Week     GoMeter `json:"week"`
+	Month    GoMeter `json:"month"`
+}
+
+// GoAccess 订阅有效期与各窗口用量
+type GoAccess struct {
+	StartsAt          string   `json:"startsAt"`
+	EndsAt            string   `json:"endsAt"`
+	CancelAtPeriodEnd bool     `json:"cancelAtPeriodEnd"`
+	Meters            GoMeters `json:"meters"`
+}
+
+// GoStatus 对应 GET /console/api/go/status 的返回。
+// 注意：普通组织走 /go/status；/internal/.../go/status 仅用于客服代登录（会 403）。
+type GoStatus struct {
+	SubscriberUserID  string    `json:"subscriberUserId"`
+	UseBalance        bool      `json:"useBalance"`
+	CancelAtPeriodEnd bool      `json:"cancelAtPeriodEnd"`
+	RenewalPending    bool      `json:"renewalPending"`
+	Access            *GoAccess `json:"access"`
+}
+
+// FetchGoStatus 拉取 Go 订阅状态（含 5h/周/月 官方已用与额度）。
+func (c *Client) FetchGoStatus() (GoStatus, error) {
+	data, err := c.doGet("/go/status", nil)
+	if err != nil {
+		return GoStatus{}, err
+	}
+	var st GoStatus
+	if err := json.Unmarshal(data, &st); err != nil {
+		return GoStatus{}, fmt.Errorf("decode go status: %w", err)
+	}
+	return st, nil
+}
