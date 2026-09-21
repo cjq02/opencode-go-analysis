@@ -63,7 +63,8 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 					subMu.Lock()
 					currentSub = &sub
 					subMu.Unlock()
-					log.Printf("subscription prefetch: 5h %d/%d reset %ds, weekly %d/%d reset %ds, monthly %d/%d reset %ds", sub.Rolling.Usage, sub.Rolling.Limit, sub.Rolling.ResetInSec, sub.Weekly.Usage, sub.Weekly.Limit, sub.Weekly.ResetInSec, sub.Monthly.Usage, sub.Monthly.Limit, sub.Monthly.ResetInSec)
+					log.Printf("subscription prefetch: 24h %dtokens/$%.2f, 7d %dtokens/$%.2f, 30d %dtokens/$%.2f",
+						sub.Day.TotalTokens, sub.Day.CostUSD, sub.Weekly.TotalTokens, sub.Weekly.CostUSD, sub.Monthly.TotalTokens, sub.Monthly.CostUSD)
 				} else {
 					log.Printf("subscription prefetch failed: %v", err)
 				}
@@ -71,7 +72,7 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 					monthlyBDMu.Lock()
 					currentMonthlyBD = &bd
 					monthlyBDMu.Unlock()
-					log.Printf("subscription breakdown prefetch monthly: usage %d/%d (%.1f%%) rows %d", bd.Usage, bd.Limit, bd.UsagePercent, len(bd.Rows))
+					log.Printf("subscription breakdown prefetch monthly: usage $%.2f rows %d", float64(bd.Usage)/1e8, len(bd.Rows))
 				} else {
 					log.Printf("subscription breakdown prefetch failed: %v", err)
 				}
@@ -201,7 +202,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		subMu.Lock()
 		currentSub = &sub
 		subMu.Unlock()
-		log.Printf("subscription refreshed on fetch: monthly %d/%d reset %ds", sub.Monthly.Usage, sub.Monthly.Limit, sub.Monthly.ResetInSec)
+		log.Printf("subscription refreshed on fetch: 30d %dtokens/$%.2f", sub.Monthly.TotalTokens, sub.Monthly.CostUSD)
 	} else {
 		log.Printf("subscription fetch on incremental failed, keep current: %v", err)
 	}
@@ -209,7 +210,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		monthlyBDMu.Lock()
 		currentMonthlyBD = &bd
 		monthlyBDMu.Unlock()
-		log.Printf("subscription breakdown refreshed: monthly %d/%d rows %d", bd.Usage, bd.Limit, len(bd.Rows))
+		log.Printf("subscription breakdown refreshed: monthly $%.2f rows %d", float64(bd.Usage)/1e8, len(bd.Rows))
 	} else {
 		log.Printf("subscription breakdown refresh failed: %v", err)
 	}
@@ -219,24 +220,29 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := int64(len(known))
-	client := api.New(cookie)
-	const staleStopLimit = 3
-	stalePages := 0
+	// 新版 console API 记录 id 与旧 id 不同源，按时间戳水位做增量：
+	// 记录按 createdAt 倒序返回，遇到不晚于水位的记录即可停止。
+	watermark, err := s.st.LatestTimeCreated(ctx, s.ws)
+	if err != nil {
+		http.Error(w, `{"error":"read db failed"}`, http.StatusInternalServerError)
+		return
+	}
+	client := api.New(cookie, s.ws)
 	err = client.FetchUsagePages(ctx, s.ws, func(page int, recs []model.UsageRecord) (stop bool) {
 		var fresh []model.UsageRecord
 		for _, rec := range recs {
+			if watermark > 0 && rec.TimeCreated <= watermark {
+				return true // 已追平历史，后续更旧，无需再翻页
+			}
 			if _, dup := known[rec.ID]; dup {
 				continue
 			}
 			known[rec.ID] = struct{}{}
 			fresh = append(fresh, rec)
 		}
-		if len(fresh) == 0 {
-			stalePages++
-			return stalePages >= staleStopLimit
+		if len(fresh) > 0 {
+			_ = s.st.BulkUpsert(ctx, fresh)
 		}
-		stalePages = 0
-		_ = s.st.BulkUpsert(ctx, fresh)
 		return false
 	})
 	if err != nil {
@@ -326,12 +332,9 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	monthlyBDMu.RLock()
 	bdForTpl := currentMonthlyBD
 	monthlyBDMu.RUnlock()
-	if subForTpl != nil && subForTpl.Monthly.Limit > 0 {
-		fetchedAt := subForTpl.FetchedAt
-		if fetchedAt.IsZero() {
-			fetchedAt = time.Now()
-		}
-		monthlyStart := subscription.CycleStart(fetchedAt, subscription.PeriodMonthly, subForTpl.Monthly.ResetInSec)
+	if subForTpl != nil && (subForTpl.Monthly.Requests > 0 || (bdForTpl != nil && len(bdForTpl.Rows) > 0)) {
+		// 新版 console API 不再提供订阅周期重置时间，周期取 trailing 30d
+		monthlyStart := time.Now().UnixMilli() - int64(subscription.PeriodMonthly)*1000
 		endMs := monthlyStart + subscription.PeriodMonthly*1000
 		subCycleStart = time.UnixMilli(monthlyStart).Format("2006-01-02")
 		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
@@ -909,22 +912,9 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 			CostUSD     float64
 		}{r.Count, r.InputTokens, r.CostUSD}
 	}
-	subMu.RLock()
-	sub := currentSub
-	subMu.RUnlock()
-	// 取全局 token 限额（来自订阅页），用于 5h/周/月的满额换算
+	// 5h/周/月限额比例固定为文档口径：月 100%、周 50%、5 小时 20%。
+	// 新版 console API 不再返回 token 限额，用标称月限额 6e9 换算比例即可。
 	var limit5h, limitWeekly, limitMonthly int64 = 1200000000, 3000000000, 6000000000
-	if sub != nil {
-		if sub.Rolling.Limit > 0 {
-			limit5h = sub.Rolling.Limit
-		}
-		if sub.Weekly.Limit > 0 {
-			limitWeekly = sub.Weekly.Limit
-		}
-		if sub.Monthly.Limit > 0 {
-			limitMonthly = sub.Monthly.Limit
-		}
-	}
 	if bd.Limit > 0 {
 		limitMonthly = bd.Limit
 	}

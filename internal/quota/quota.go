@@ -51,7 +51,7 @@ var defaultPerModelQuotas = map[string]float64{
 	"qwen3.6-plus":               60,
 	"deepseek-v4-pro":            15,
 	"deepseek-v4-flash":          30,
-	// deepseek-v4.1-flash 原价 $15，限时 4x 至 $60（文档标注 9 月 20 日结束）；
+	// deepseek-v4.1-flash 原价 $15，限时 4x 至 $60（文档标注 9 月 27 日结束）；
 	// 兜底取当前生效值，促销结束后以文档抓取为准。
 	"deepseek-v4.1-flash":          60,
 	"deepseek-v4-flash-vision-exp": 15,

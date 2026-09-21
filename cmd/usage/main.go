@@ -64,15 +64,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "读取已入库记录失败: %v\n", err)
 		os.Exit(1)
 	}
-	client := api.New(cookie)
+	watermark, err := st.LatestTimeCreated(ctx, workspaceID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读取时间水位失败: %v\n", err)
+		os.Exit(1)
+	}
+	client := api.New(cookie, workspaceID)
 	start := time.Now()
 
 	fmt.Fprintf(os.Stderr, "抓取 workspace %s (已有 %d 条, 增量模式)...\n", workspaceID, len(known))
-	const staleStopLimit = 3 // 连续多少页全部是已入库记录则停止
-	stalePages := 0
 	err = client.FetchUsagePages(ctx, workspaceID, func(page int, recs []model.UsageRecord) (stop bool) {
 		var fresh []model.UsageRecord
 		for _, r := range recs {
+			if watermark > 0 && r.TimeCreated <= watermark {
+				return true // 已追平历史
+			}
 			if _, dup := known[r.ID]; dup {
 				continue
 			}
@@ -80,11 +86,8 @@ func main() {
 			fresh = append(fresh, r)
 		}
 		if len(fresh) == 0 {
-			stalePages++
-			fmt.Fprintf(os.Stderr, "\rpage %d: 无新数据 (%d/%d, 再连续 %d 页停止)", page, stalePages, staleStopLimit, staleStopLimit-stalePages)
-			return stalePages >= staleStopLimit
+			return false
 		}
-		stalePages = 0
 		if err := st.BulkUpsert(ctx, fresh); err != nil {
 			fmt.Fprintf(os.Stderr, "\n写入数据库失败: %v\n", err)
 			os.Exit(1)

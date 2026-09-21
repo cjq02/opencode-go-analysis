@@ -153,8 +153,7 @@ FROM usage_records WHERE workspace_id = ? ORDER BY time_created ASC`, workspaceI
 }
 
 // AllIDs 查询某 workspace 已入库的全部记录 id（用于增量去重判断）
-func (s *Store) AllIDs(ctx context.Context, workspaceID string) (map[string]struct{}, error) {
-	rows, err := s.db.QueryContext(ctx,
+func (s *Store) AllIDs(ctx context.Context, workspaceID string) (map[string]struct{}, error) {	rows, err := s.db.QueryContext(ctx,
 		`SELECT id FROM usage_records WHERE workspace_id = ?`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -169,6 +168,22 @@ func (s *Store) AllIDs(ctx context.Context, workspaceID string) (map[string]stru
 		ids[id] = struct{}{}
 	}
 	return ids, rows.Err()
+}
+
+// LatestTimeCreated 返回某 workspace 已入库记录的最大 time_created（毫秒）；
+// 无记录时返回 0。新版 console API 记录 id 与旧 id 不同源，增量抓取
+// 改为以时间戳为水位，避免历史数据被重复写入。
+func (s *Store) LatestTimeCreated(ctx context.Context, workspaceID string) (int64, error) {
+	var ts sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT MAX(time_created) FROM usage_records WHERE workspace_id = ?`, workspaceID).Scan(&ts)
+	if err != nil {
+		return 0, err
+	}
+	if !ts.Valid {
+		return 0, nil
+	}
+	return ts.Int64, nil
 }
 
 // Query 按月x模型分组统计
