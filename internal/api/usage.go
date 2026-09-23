@@ -18,6 +18,25 @@ func (c *Client) FetchUsagePage(workspaceID string, page int) ([]model.UsageReco
 	return recs, nil
 }
 
+// SplitFreshPage 按时间水位把一页记录分成「需要写库的新记录」，并给出是否该停止翻页。
+//
+// 记录按 createdAt 倒序返回：一旦遇到不晚于水位的记录，之后的都更旧，可停止翻页。
+// 关键约定：**即使 stop=true，返回的 fresh 也必须写库** —— 否则半页新记录会被丢弃，
+// 表现为增量抓取永远 added:0（只有整页全为新记录时才写得进去）。
+func SplitFreshPage(watermark int64, known map[string]struct{}, recs []model.UsageRecord) (fresh []model.UsageRecord, stop bool) {
+	for _, rec := range recs {
+		if watermark > 0 && rec.TimeCreated <= watermark {
+			return fresh, true
+		}
+		if _, dup := known[rec.ID]; dup {
+			continue
+		}
+		known[rec.ID] = struct{}{}
+		fresh = append(fresh, rec)
+	}
+	return fresh, false
+}
+
 // FetchUsagePages 从最新记录开始顺序抓取，每页通过 onPage 回调交付；
 // 回调返回 stop=true 时停止抓取（用于增量：已抓完所有新数据）。
 // 新版 console API 为 cursor 分页：nextCursor 为空即数据末尾。

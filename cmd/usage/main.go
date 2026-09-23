@@ -74,26 +74,17 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "抓取 workspace %s (已有 %d 条, 增量模式)...\n", workspaceID, len(known))
 	err = client.FetchUsagePages(ctx, workspaceID, func(page int, recs []model.UsageRecord) (stop bool) {
-		var fresh []model.UsageRecord
-		for _, r := range recs {
-			if watermark > 0 && r.TimeCreated <= watermark {
-				return true // 已追平历史
-			}
-			if _, dup := known[r.ID]; dup {
-				continue
-			}
-			known[r.ID] = struct{}{}
-			fresh = append(fresh, r)
-		}
+		// 即使 stop=true（已追平历史）也必须写入 fresh —— 半页新记录不能丢。
+		fresh, stop := api.SplitFreshPage(watermark, known, recs)
 		if len(fresh) == 0 {
-			return false
+			return stop
 		}
 		if err := st.BulkUpsert(ctx, fresh); err != nil {
 			fmt.Fprintf(os.Stderr, "\n写入数据库失败: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "\r进度: 第 %d 页, 新增 %d 条 (共入库 %d)", page, len(fresh), len(known))
-		return false
+		return stop
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n抓取中断: %v\n", err)

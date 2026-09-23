@@ -231,21 +231,14 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	client := api.New(cookie, s.ws)
 	err = client.FetchUsagePages(ctx, s.ws, func(page int, recs []model.UsageRecord) (stop bool) {
-		var fresh []model.UsageRecord
-		for _, rec := range recs {
-			if watermark > 0 && rec.TimeCreated <= watermark {
-				return true // 已追平历史，后续更旧，无需再翻页
-			}
-			if _, dup := known[rec.ID]; dup {
-				continue
-			}
-			known[rec.ID] = struct{}{}
-			fresh = append(fresh, rec)
-		}
+		// 即使 stop=true（已追平历史）也必须写入 fresh —— 半页新记录不能丢。
+		fresh, stop := api.SplitFreshPage(watermark, known, recs)
 		if len(fresh) > 0 {
-			_ = s.st.BulkUpsert(ctx, fresh)
+			if err := s.st.BulkUpsert(ctx, fresh); err != nil {
+				log.Printf("bulk upsert failed (page %d, %d recs): %v", page, len(fresh), err)
+			}
 		}
-		return false
+		return stop
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
