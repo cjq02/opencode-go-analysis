@@ -21,8 +21,10 @@ func TestToMeterComputesPercentAndUSD(t *testing.T) {
 }
 
 func TestToMeterParsesResetsAt(t *testing.T) {
+	// 用相对时间，避免固定日期过期后 ResetInSec 被 clamp 成 0
+	resetsAt := time.Now().UTC().Add(2 * time.Hour).Format(time.RFC3339)
 	m := toMeter(api.GoMeter{
-		ResetsAt:        "2026-09-21T11:14:11.441Z",
+		ResetsAt:        resetsAt,
 		LimitMicroCents: 1200000000,
 		UsedMicroCents:  39230754,
 	}, time.Time{})
@@ -30,7 +32,7 @@ func TestToMeterParsesResetsAt(t *testing.T) {
 		t.Fatalf("ResetsAt not parsed")
 	}
 	if m.ResetInSec <= 0 {
-		t.Errorf("ResetInSec = %d, want > 0", m.ResetInSec)
+		t.Errorf("ResetInSec = %d, want > 0 (resetsAt=%s)", m.ResetInSec, resetsAt)
 	}
 }
 

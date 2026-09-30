@@ -229,6 +229,11 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"read db failed"}`, http.StatusInternalServerError)
 		return
 	}
+	// 数据源是 /console/api/request-logs，只保留 RetentionDays 天；
+	// 水位掉出窗口就补不回来，必须显式告警而不是静默漏数。
+	if msg := api.CheckRetentionGap(watermark); msg != "" {
+		log.Print(msg)
+	}
 	client := api.New(cookie, s.ws)
 	err = client.FetchUsagePages(ctx, s.ws, func(page int, recs []model.UsageRecord) (stop bool) {
 		// 即使 stop=true（已追平历史）也必须写入 fresh —— 半页新记录不能丢。

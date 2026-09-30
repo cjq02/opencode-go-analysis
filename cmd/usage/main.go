@@ -69,6 +69,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "读取时间水位失败: %v\n", err)
 		os.Exit(1)
 	}
+	if msg := api.CheckRetentionGap(watermark); msg != "" {
+		fmt.Fprintf(os.Stderr, "警告: %s\n", msg)
+	}
 	client := api.New(cookie, workspaceID)
 	start := time.Now()
 

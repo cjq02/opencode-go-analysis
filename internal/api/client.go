@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -140,26 +141,40 @@ func (f *flexInt) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UsageItem 对应 /api/usage/rows 的单条记录
-type UsageItem struct {
-	ID               flexInt `json:"id"`
-	OrgID            string  `json:"orgId"`
-	Model            string  `json:"model"`
-	Provider         string  `json:"provider"`
-	InputTokens      flexInt `json:"inputTokens"`
-	OutputTokens     flexInt `json:"outputTokens"`
-	ReasoningTokens  flexInt `json:"reasoningTokens"`
-	CacheReadTokens  flexInt `json:"cacheReadTokens"`
-	CacheWrite5m     flexInt `json:"cacheWrite5mTokens"`
-	CacheWrite1h     flexInt `json:"cacheWrite1hTokens"`
-	CostMicroCents   flexInt `json:"costMicroCents"`
-	BillingSource    string  `json:"billingSource"`
-	CreatedAt        string  `json:"createdAt"`
+// RequestLog 对应 /console/api/request-logs 的单条请求日志。
+// 旧的 /console/api/usage/rows 已于 2026-09-30 下线（HTTP 404，console 前端
+// 的 usage 资源只剩 summary/cost-by-day/models/users），改用 Logs 页的
+// request-logs 接口按相同语义重建 usage_records：
+//   - 过滤 category=inference 且 outcome=succeeded 即与旧 usage/rows 完全等价
+//     （2026-09-20 实测 269 条 / $0.204903，与库内 269 条 / $0.20490322 一致）
+//   - cost 以「美元浮点数」返回，需 ×1e8 转成本库的 1e-8 美元整数
+//   - cacheWrite1hTokens 恒不返回，只有 cacheWriteTokens（可为 null）
+//   - provider 对 go/standard/go-plus 被上游脱敏为 "opencode"（分析查询只按
+//     model 聚合，故不影响结果）
+//   - 只保留 30 天（响应里的 retentionDays），更早的历史拉不到
+type RequestLog struct {
+	ID                string   `json:"id"`
+	WorkspaceID       string   `json:"workspaceID"`
+	StartedAt         int64    `json:"startedAt"`
+	Category          string   `json:"category"`
+	Outcome           string   `json:"outcome"`
+	Model             string   `json:"model"`
+	Provider          string   `json:"provider"`
+	SessionID         string   `json:"sessionID"`
+	InputTokens       flexInt  `json:"inputTokens"`
+	OutputTokens      flexInt  `json:"outputTokens"`
+	ReasoningTokens   flexInt  `json:"reasoningTokens"`
+	CacheReadTokens   flexInt  `json:"cacheReadTokens"`
+	CacheWriteTokens  flexInt  `json:"cacheWriteTokens"`
+	CacheWrite1h      flexInt  `json:"cacheWrite1hTokens"`
+	Cost              *float64 `json:"cost"`
 }
 
-type rowsResponse struct {
-	Items      []UsageItem `json:"items"`
-	NextCursor *string     `json:"nextCursor"`
+type requestLogsResponse struct {
+	Items         []RequestLog `json:"items"`
+	NextCursor    *string      `json:"nextCursor"`
+	Until         int64        `json:"until"`
+	RetentionDays int          `json:"retentionDays"`
 }
 
 // ModelStat 对应 /api/usage/models 的单模型聚合
@@ -198,49 +213,65 @@ type Summary struct {
 
 // FetchUsageRowsPage 拉取用量明细的一页（cursor 分页；cursor 为 "" 取首页）。
 // 返回记录、下一页 cursor（"" 表示末尾）。
-func (c *Client) FetchUsageRowsPage(timeRange, cursor string, pageSize int) ([]model.UsageRecord, string, error) {
+// 实际走 /console/api/request-logs：limit 上限 100，cursor 是服务端给的
+// 原样字符串（内容为 JSON，不要再二次编码），按 startedAt 倒序返回。
+// pageSize 之外还会带上 category=inference&outcome=succeeded 的服务端过滤，
+// 映射时再本地过滤一次，避免服务端忽略过滤条件时语义跑偏。
+func (c *Client) FetchUsageRowsPage(cursor string, pageSize int) ([]model.UsageRecord, string, error) {
 	if pageSize <= 0 || pageSize > PageSize {
 		pageSize = PageSize
 	}
-	query := map[string]string{"range": timeRange, "pageSize": strconv.Itoa(pageSize)}
+	query := map[string]string{
+		"limit":    strconv.Itoa(pageSize),
+		"category": "inference",
+		"outcome":  "succeeded",
+	}
 	if cursor != "" {
 		query["cursor"] = cursor
 	}
-	data, err := c.doGet("/usage/rows", query)
+	data, err := c.doGet("/request-logs", query)
 	if err != nil {
 		return nil, "", err
 	}
-	var rr rowsResponse
+	var rr requestLogsResponse
 	if err := json.Unmarshal(data, &rr); err != nil {
-		return nil, "", fmt.Errorf("decode usage rows: %w", err)
+		return nil, "", fmt.Errorf("decode request logs: %w", err)
 	}
 	recs := make([]model.UsageRecord, 0, len(rr.Items))
 	for _, it := range rr.Items {
-		rec := model.UsageRecord{
-			ID:              strconv.FormatInt(int64(it.ID), 10),
-			WorkspaceID:     it.OrgID,
-			Model:           it.Model,
-			Provider:        it.Provider,
-			InputTokens:     int64(it.InputTokens),
-			OutputTokens:    int64(it.OutputTokens),
-			ReasoningTokens: int64(it.ReasoningTokens),
-			CacheReadTokens: int64(it.CacheReadTokens),
-			CacheWrite5m:    int64(it.CacheWrite5m),
-			CacheWrite1h:    int64(it.CacheWrite1h),
-			Cost:            int64(it.CostMicroCents), // 与旧 cost_raw 同单位：1e-8 美元
+		if it.Category != "inference" || it.Outcome != "succeeded" {
+			continue
 		}
-		if it.CreatedAt != "" {
-			if ts, err := time.Parse(time.RFC3339, it.CreatedAt); err == nil {
-				rec.TimeCreated = ts.UnixMilli()
-			}
-		}
-		recs = append(recs, rec)
+		recs = append(recs, toUsageRecord(it))
 	}
 	next := ""
 	if rr.NextCursor != nil {
 		next = *rr.NextCursor
 	}
 	return recs, next, nil
+}
+
+// toUsageRecord 把一条 request-log 记录映射成本库的 UsageRecord。
+// cost 单位由「美元浮点」转成 1e-8 美元整数，与旧 cost_raw 口径一致。
+func toUsageRecord(it RequestLog) model.UsageRecord {
+	rec := model.UsageRecord{
+		ID:              it.ID,
+		WorkspaceID:     it.WorkspaceID,
+		TimeCreated:     it.StartedAt,
+		Model:           it.Model,
+		Provider:        it.Provider,
+		SessionID:       it.SessionID,
+		InputTokens:     int64(it.InputTokens),
+		OutputTokens:    int64(it.OutputTokens),
+		ReasoningTokens: int64(it.ReasoningTokens),
+		CacheReadTokens: int64(it.CacheReadTokens),
+		CacheWrite5m:    int64(it.CacheWriteTokens),
+		CacheWrite1h:    int64(it.CacheWrite1h),
+	}
+	if it.Cost != nil {
+		rec.Cost = int64(math.Round(*it.Cost * 1e8))
+	}
+	return rec
 }
 
 // FetchUsageModels 拉取某 range 下全量模型聚合（自动翻页）。
