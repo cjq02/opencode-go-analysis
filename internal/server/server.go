@@ -332,39 +332,32 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	monthlyBDMu.RLock()
 	bdForTpl := currentMonthlyBD
 	monthlyBDMu.RUnlock()
-	if subForTpl != nil && subForTpl.Access() {
-		// 订阅月周期用官方 access.startsAt/endsAt；缺失时回退 trailing 30d
-		monthlyStart := time.Now().UnixMilli() - int64(subscription.PeriodMonthly)*1000
-		endMs := time.Now().UnixMilli()
-		if !subForTpl.PeriodStart.IsZero() {
-			monthlyStart = subForTpl.PeriodStart.UnixMilli()
+	// 周期窗口：优先官方订阅周期，订阅未拉取时回退 trailing 30d。
+	// 这里刻意不挂 Access() 门控 —— 峰谷拆分只依赖本地 DB 的时间窗
+	//（北京时间周一至周五 09-12 / 14-18），与订阅状态无关。
+	// 挂在门控内的后果是 /go/status 一旦返回 access:null，整块就退回
+	// 不拆分的 calendar-month 路径，满额预估里的 DeepSeek 峰/谷两行整体消失。
+	monthlyStart, endMs := cycleWindow(subForTpl)
+	subCycleStart = time.UnixMilli(monthlyStart).Format("2006-01-02")
+	subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
+	quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
+	if cycleRows, err := s.st.CycleModelStats(ctx, s.ws, monthlyStart); err == nil && len(cycleRows) > 0 {
+		// 同一模型不同 ID 先归一（如 deepseek-flash → deepseek-v4.1-flash），
+		// 否则峰谷拆分时查不到对应项会漏拆，且明细表会出现两行。
+		cycleRows = mergeCycleRowsByCanonical(cycleRows)
+		// DeepSeek 按峰/谷拆分为两行（文档峰时：周一至周五 北京时间 09-12 / 14-18）
+		expandedCycleRows := cycleRows
+		if splitRows, err := s.st.CycleDeepseekSplit(ctx, s.ws, monthlyStart); err == nil && len(splitRows) > 0 {
+			expandedCycleRows = expandCycleRowsWithPeak(cycleRows, mergeSplitRowsByCanonical(splitRows))
 		}
-		if !subForTpl.PeriodEnd.IsZero() {
-			endMs = subForTpl.PeriodEnd.UnixMilli()
-		}
-		subCycleStart = time.UnixMilli(monthlyStart).Format("2006-01-02")
-		subCycleEnd = time.UnixMilli(endMs).Format("2006-01-02")
-		quotaCycleLabel = fmt.Sprintf("%s ~ %s 订阅周期", subCycleStart, subCycleEnd)
-		if cycleRows, err := s.st.CycleModelStats(ctx, s.ws, monthlyStart); err == nil && len(cycleRows) > 0 {
-			// 同一模型不同 ID 先归一（如 deepseek-flash → deepseek-v4.1-flash），
-			// 否则峰谷拆分时查不到对应项会漏拆，且明细表会出现两行。
-			cycleRows = mergeCycleRowsByCanonical(cycleRows)
-			// DeepSeek 按峰/谷拆分为两行（文档峰时：周一至周五 北京时间 09-12 / 14-18）
-			expandedCycleRows := cycleRows
-			if splitRows, err := s.st.CycleDeepseekSplit(ctx, s.ws, monthlyStart); err == nil && len(splitRows) > 0 {
-				expandedCycleRows = expandCycleRowsWithPeak(cycleRows, mergeSplitRowsByCanonical(splitRows))
-			}
-			if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
-				quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, expandedCycleRows, quotaCycleLabel)
-			} else {
-				quotaMonth, quotaRows = quotaEstimateCycle(expandedCycleRows, quotaCycleLabel)
-			}
+		if bdForTpl != nil && len(bdForTpl.Rows) > 0 {
+			quotaMonth, quotaRows = quotaEstimateFromBreakdown(bdForTpl, expandedCycleRows, quotaCycleLabel)
 		} else {
-			quotaMonth, quotaRows = quotaEstimate(monthRows, monthModelRows)
-			quotaCycleLabel = ""
+			quotaMonth, quotaRows = quotaEstimateCycle(expandedCycleRows, quotaCycleLabel)
 		}
 	} else {
 		quotaMonth, quotaRows = quotaEstimate(monthRows, monthModelRows)
+		quotaCycleLabel = ""
 	}
 	qLabels, q5h, qWeekly, qMonthly := quotaChartData(quotaRows)
 	quotaSummary := buildQuotaSummary(quotaRows, qForTpl)
@@ -850,6 +843,25 @@ func expandCycleRowsWithPeak(cycleRows []struct {
 		}{Model: r.Model + " (Off-Peak)", Count: sp.offCount, CostUSD: sp.offCost, InputTokens: sp.offInput})
 	}
 	return out
+}
+
+// cycleWindow 返回满额预估的周期窗口 [startMs, endMs]。
+// 有订阅时用官方 access.startsAt/endsAt，否则回退 trailing 30d。
+// 订阅缺失时的回退值必须可用 —— 峰谷拆分等纯 DB 派生口径靠它取数，
+// 所以本函数不能只在 Access() 成立时才被调用。
+func cycleWindow(sub *subscription.Info) (startMs, endMs int64) {
+	now := time.Now().UnixMilli()
+	start := now - int64(subscription.PeriodMonthly)*1000
+	if sub == nil {
+		return start, now
+	}
+	if !sub.PeriodStart.IsZero() {
+		start = sub.PeriodStart.UnixMilli()
+	}
+	if !sub.PeriodEnd.IsZero() {
+		return start, sub.PeriodEnd.UnixMilli()
+	}
+	return start, now
 }
 
 func quotaEstimateCycle(cycleRows []struct {
