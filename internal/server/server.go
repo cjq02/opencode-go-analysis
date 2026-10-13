@@ -296,6 +296,9 @@ type QuotaSummary struct {
 	RemainingTokens   int64
 	UsedPercent       float64
 	TokensPer100Calls int64
+	// 周期时间进度：剩余天数与剩余占比（仅在有订阅周期时有意义）
+	RemainingDays    float64
+	RemainingDaysPct float64
 }
 
 // buildData 组装模板数据（表格降序，图表升序）
@@ -403,6 +406,18 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 		}
 	}
 	shareTop3, shareCheapest := buildShareData(quotaRows)
+	// 剩余天数比例：订阅周期结束时间 vs 现在（无有效周期则为 0）
+	if subForTpl != nil && !subForTpl.PeriodStart.IsZero() && !subForTpl.PeriodEnd.IsZero() {
+		total := subForTpl.PeriodEnd.Sub(subForTpl.PeriodStart).Seconds()
+		remain := time.Until(subForTpl.PeriodEnd).Seconds()
+		if total > 0 {
+			if remain < 0 {
+				remain = 0
+			}
+			quotaSummary.RemainingDays = remain / 86400
+			quotaSummary.RemainingDaysPct = remain / total * 100
+		}
+	}
 	return map[string]any{
 		"GeneratedAt":      time.Now().Format("2006-01-02 15:04:05"),
 		"Range":            rangeStr,
