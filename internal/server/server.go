@@ -101,6 +101,12 @@ func New(dbPath, ws, dailyMon, peakStart string) (*Server, error) {
 			}
 			return float64(peak) / float64(total) * 100
 		},
+		"offPct": func(total, off int64) float64 {
+			if total == 0 {
+				return 0
+			}
+			return float64(off) / float64(total) * 100
+		},
 	}).Parse(web.IndexHTML))
 	return &Server{st: st, tmpl: tmpl, ws: ws, dailyMonDefault: dailyMon, peakStartDefault: peakStart}, nil
 }
