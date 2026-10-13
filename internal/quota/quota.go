@@ -10,55 +10,71 @@ import (
 	"time"
 )
 
+// 旧版中文文档 /docs/zh-cn/go/ 已 302 到新版英文页（2026-10 实测）。
 const docsURL = "https://opencode.ai/docs/zh-cn/go/"
 
-// Quota 来自文档的额度（USD）
+// Quota 来自文档的额度（USD）。
+// 新版文档（/v2/docs/console/go/）不再给出全局 5h/周/月 $ 金额，
+// 而是「每模型各有月限额；5h = 月限额 20%、周 = 50%、月 = 100%」。
+// FiveHour/Weekly/Monthly 为典型单模型口径（$60 × 百分比）供展示与汇总回退，
+// 真正参与满额估算的是 PerModel + FiveHourPct/WeeklyPct。
 type Quota struct {
 	FiveHour float64 `json:"fiveHour"`
 	Weekly   float64 `json:"weekly"`
 	Monthly  float64 `json:"monthly"`
-	Source   string  `json:"source"`
-	FetchedAt time.Time `json:"fetchedAt"`
-	// PerModel 按模型归一化 key -> 月度使用额度 USD（来自“使用额度”列）
+	// FiveHourPct/WeeklyPct 为 5h/周窗口占月限额的百分比（新版文档 20/50）
+	FiveHourPct float64   `json:"fiveHourPct"`
+	WeeklyPct   float64   `json:"weeklyPct"`
+	Source      string    `json:"source"`
+	FetchedAt   time.Time `json:"fetchedAt"`
+	// PerModel 按模型归一化 key -> 月度使用额度 USD（来自“Monthly limit”列）
 	PerModel map[string]float64 `json:"perModel"`
 }
 
-var Default = Quota{FiveHour: 12, Weekly: 30, Monthly: 60, Source: "hardcoded", PerModel: defaultPerModelQuotas}
+var Default = Quota{
+	FiveHour: 12, Weekly: 30, Monthly: 60,
+	FiveHourPct: 20, WeeklyPct: 50,
+	Source: "hardcoded", PerModel: defaultPerModelQuotas,
+}
 
-// defaultPerModelQuotas 文档表格的硬编码兜底（与 docs/zh-cn/go/ 每月限制列一致），
-// 避免文档抓取失败时 GetPerModel 回退到 $60 导致“额度都变成 60”。
+// defaultPerModelQuotas 文档 Go 套餐表「Monthly limit」列的硬编码兜底
+// （2026-10-13 与 /v2/docs/console/go/ 一致），避免文档抓取失败时
+// GetPerModel 回退到 $60 导致“额度都变成 60”。
 var defaultPerModelQuotas = map[string]float64{
 	"omen-alpha":                 100,
 	"glm-5.3-flash":              60,
 	"glm-5.3":                    15,
 	"glm-5.2":                    60,
-	"glm-5.1":                    60,
 	"kimi-k3":                    15,
 	"kimi-k2.7-code":             60,
 	"kimi-k2.6":                  60,
 	"longcat-2.0":                60,
+	"mimo-v2.6-flash":            60,
+	"mimo-v2.6-pro":              15,
 	"mimo-v2.5":                  60,
 	"mimo-v2.5-pro":              15,
 	"minimax-m3":                 60,
 	"minimax-m2.7":               60,
-	"minimax-m2.5":               60,
 	"muse-spark-1.3-contributor": 60,
 	"muse-spark-1.2-contributor": 60,
 	"qwen3.8-max":                15,
 	"qwen3.8-flash":              30,
-	"qwen3.7-max":                30,
 	"qwen3.7-plus":               60,
-	"qwen3.6-plus":               60,
 	"deepseek-v4-pro":            15,
 	"deepseek-v4-flash":          30,
-	// deepseek-v4.1-flash 原价 $15，限时 4x 至 $60（文档标注 9 月 27 日结束）；
-	// 兜底取当前生效值，促销结束后以文档抓取为准。
-	"deepseek-v4.1-flash":          60,
+	// 限时 4x 提升后文档现为 $80（2026-10-13 实测）
+	"deepseek-v4.1-flash":          80,
 	"deepseek-v4-flash-vision-exp": 15,
-	"hy4-preview":                30,
-	"hy3":                        60,
-	"grok-4.6":                   15,
-	"gpt-5.6-luna":               15,
+	"hy4-preview":                  30,
+	"hy3":                          60,
+	"space-bunny":                  30,
+	"grok-4.7":                     15,
+	"grok-4.6":                     15,
+	"gpt-6-luna":                   15,
+	"gpt-5.6-luna":                 15,
+	"claude-haiku-5-5":             15,
+	// 文档显示名归一化产物（点保留），与上面的官方 ID 双写兜底
+	"claude-haiku-5.5": 15,
 }
 
 // Fetch 爬取文档解析额度，失败返回 error，调用方可回退 Default
@@ -82,14 +98,19 @@ func Fetch(ctx context.Context) (Quota, error) {
 }
 
 var (
-	re5h     = regexp.MustCompile(`5\s*小时限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
-	reWeekly = regexp.MustCompile(`每周限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
+	re5h      = regexp.MustCompile(`5\s*小时限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
+	reWeekly  = regexp.MustCompile(`每周限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
 	reMonthly = regexp.MustCompile(`每月限制[^0-9]*([0-9]+(?:\.[0-9]+)?)\s*美元`)
-	// 新版文档格式：<li><strong>5 小时限制</strong> — $12 的使用额度</li>
+	// 旧版中文列表格式：<li><strong>5 小时限制</strong> — $12 的使用额度</li>
 	// 必须要求 </strong> 避免误匹配表头 <th>每月限制</th> 到首个价格 $0.20
-	re5hNew     = regexp.MustCompile(`5\s*小时限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
-	reWeeklyNew = regexp.MustCompile(`每周限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
+	re5hNew      = regexp.MustCompile(`5\s*小时限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
+	reWeeklyNew  = regexp.MustCompile(`每周限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
 	reMonthlyNew = regexp.MustCompile(`每月限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
+	// 新版英文文档（2026-10 起）：无全局 $ 金额，只有占月限额的百分比
+	// "Each model has the following usage limits: 5-hour — 20% of the monthly limit;
+	//  weekly — 50%; and monthly — 100%."
+	re5hPct     = regexp.MustCompile(`5-hour\s*[—–-]\s*(\d+)\s*%`)
+	reWeeklyPct = regexp.MustCompile(`weekly\s*[—–-]\s*(\d+)\s*%`)
 )
 
 func findQuota(reNew, reOld *regexp.Regexp, html string) string {
@@ -102,21 +123,46 @@ func findQuota(reNew, reOld *regexp.Regexp, html string) string {
 	return ""
 }
 
+// Parse 解析文档额度。新版文档只有「每模型月限额 + 5h/周百分比」，
+// 旧版中文文档还有全局 $12/$30/$60 —— 两者兼容：
+//   - 全局 $ 金额可选：旧格式直接取；新格式由 Monthly × 百分比派生
+//   - 百分比可选：未解析到时按文档默认 20/50
+//   - 只要 per-model 表有结果即成功；两者皆空才报错
 func Parse(html string) (Quota, error) {
+	perModel := parsePerModelQuotas(html)
+	// 全局 $ 金额（旧版中文文档）
 	s5 := findQuota(re5hNew, re5h, html)
 	sW := findQuota(reWeeklyNew, reWeekly, html)
 	sM := findQuota(reMonthlyNew, reMonthly, html)
-	if s5 == "" || sW == "" || sM == "" {
-		return Quota{}, fmt.Errorf("parse quota failed")
+	// 5h/周占月限额百分比（新版英文文档；旧版无此文案时用默认）
+	pct5, pctW := 20.0, 50.0
+	if m := re5hPct.FindStringSubmatch(html); m != nil {
+		fmt.Sscan(m[1], &pct5)
 	}
-	var q Quota
-	fmt.Sscan(s5, &q.FiveHour)
-	fmt.Sscan(sW, &q.Weekly)
-	fmt.Sscan(sM, &q.Monthly)
-	q.Source = docsURL
-	q.FetchedAt = time.Now()
-	q.PerModel = parsePerModelQuotas(html)
+	if m := reWeeklyPct.FindStringSubmatch(html); m != nil {
+		fmt.Sscan(m[1], &pctW)
+	}
+	q := Quota{
+		FiveHourPct: pct5,
+		WeeklyPct:   pctW,
+		Monthly:     60, // 典型单模型月限额（Go 套餐多数模型 $60），仅作展示/汇总回退
+		Source:      docsURL,
+		FetchedAt:   time.Now(),
+	}
+	// 旧格式解析到的全局金额优先（语义即全局口径）；新格式按 $60 × 百分比派生
+	if s5 != "" && sW != "" && sM != "" {
+		fmt.Sscan(s5, &q.FiveHour)
+		fmt.Sscan(sW, &q.Weekly)
+		fmt.Sscan(sM, &q.Monthly)
+	} else {
+		q.FiveHour = q.Monthly * pct5 / 100
+		q.Weekly = q.Monthly * pctW / 100
+	}
+	q.PerModel = perModel
 	if len(q.PerModel) == 0 {
+		if s5 == "" && sW == "" && sM == "" {
+			return Quota{}, fmt.Errorf("parse quota failed: no per-model table and no global limits")
+		}
 		q.PerModel = defaultPerModelQuotas
 	}
 	return q, nil
@@ -145,6 +191,13 @@ func parsePerModelQuotas(html string) map[string]float64 {
 		// 同一模型多行（如 Off-Peak/Peak）取首值；加成行的生效值已优先写入，不被覆盖
 		if _, exists := out[key]; !exists {
 			out[key] = usd
+		}
+		// digit.digit ↔ digit-digit 变体一并登记（如 claude-haiku-5.5 ↔ claude-haiku-5-5），
+		// 使 DB 里的官方模型 ID 无需依赖 GetPerModel 运行时兜底也能命中。
+		if alt := digitSepVariant(key); alt != key {
+			if _, exists := out[alt]; !exists {
+				out[alt] = usd
+			}
 		}
 	}
 	for _, m := range reTR.FindAllStringSubmatch(html, -1) {
@@ -203,6 +256,21 @@ var DeepSeekDocs = map[string]DeepSeekPrice{
 // PeakHoursNote 峰时段说明（北京时间）
 const PeakHoursNote = "峰时：周一至周五 北京时间 09:00-12:00 / 14:00-18:00（UTC 01:00-04:00 / 06:00-10:00），其余为谷时"
 
+var (
+	reDigitDot  = regexp.MustCompile(`(\d)\.(\d)`)
+	reDigitDash = regexp.MustCompile(`(\d)-(\d)`)
+)
+
+// digitSepVariant 在 digit.digit 与 digit-digit 之间互换。
+// 官方模型 ID 有时代号用 - 代 .（claude-haiku-5-5），文档显示名则保留点
+// （"Claude Haiku 5.5" → claude-haiku-5.5），需双向兜底。
+func digitSepVariant(s string) string {
+	if reDigitDot.MatchString(s) {
+		return reDigitDot.ReplaceAllString(s, "$1-$2")
+	}
+	return reDigitDash.ReplaceAllString(s, "$1.$2")
+}
+
 // GetPerModel 返回归一化后的按模型额度，未命中则回退 monthly 通用额度
 func (q Quota) GetPerModel(model string) float64 {
 	key := normalizeModel(model)
@@ -211,6 +279,10 @@ func (q Quota) GetPerModel(model string) float64 {
 	}
 	// 尝试去掉版本号后的匹配，如 deepseek-v4-flash
 	if v, ok := q.PerModel[strings.ToLower(model)]; ok {
+		return v
+	}
+	// digit.digit ↔ digit-digit 变体（claude-haiku-5-5 ↔ claude-haiku-5.5）
+	if v, ok := q.PerModel[digitSepVariant(key)]; ok {
 		return v
 	}
 	if q.Monthly != 0 {

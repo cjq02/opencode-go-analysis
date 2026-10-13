@@ -42,7 +42,7 @@ func New(cookie, orgID string) *Client {
 		Cookie:  cookie,
 		OrgID:   orgID,
 		HTTP:    &http.Client{Timeout: 30 * time.Second},
-		minGap: 1 * time.Second,
+		minGap:  1 * time.Second,
 	}
 }
 
@@ -153,21 +153,21 @@ func (f *flexInt) UnmarshalJSON(b []byte) error {
 //     model 聚合，故不影响结果）
 //   - 只保留 30 天（响应里的 retentionDays），更早的历史拉不到
 type RequestLog struct {
-	ID                string   `json:"id"`
-	WorkspaceID       string   `json:"workspaceID"`
-	StartedAt         int64    `json:"startedAt"`
-	Category          string   `json:"category"`
-	Outcome           string   `json:"outcome"`
-	Model             string   `json:"model"`
-	Provider          string   `json:"provider"`
-	SessionID         string   `json:"sessionID"`
-	InputTokens       flexInt  `json:"inputTokens"`
-	OutputTokens      flexInt  `json:"outputTokens"`
-	ReasoningTokens   flexInt  `json:"reasoningTokens"`
-	CacheReadTokens   flexInt  `json:"cacheReadTokens"`
-	CacheWriteTokens  flexInt  `json:"cacheWriteTokens"`
-	CacheWrite1h      flexInt  `json:"cacheWrite1hTokens"`
-	Cost              *float64 `json:"cost"`
+	ID               string   `json:"id"`
+	WorkspaceID      string   `json:"workspaceID"`
+	StartedAt        int64    `json:"startedAt"`
+	Category         string   `json:"category"`
+	Outcome          string   `json:"outcome"`
+	Model            string   `json:"model"`
+	Provider         string   `json:"provider"`
+	SessionID        string   `json:"sessionID"`
+	InputTokens      flexInt  `json:"inputTokens"`
+	OutputTokens     flexInt  `json:"outputTokens"`
+	ReasoningTokens  flexInt  `json:"reasoningTokens"`
+	CacheReadTokens  flexInt  `json:"cacheReadTokens"`
+	CacheWriteTokens flexInt  `json:"cacheWriteTokens"`
+	CacheWrite1h     flexInt  `json:"cacheWrite1hTokens"`
+	Cost             *float64 `json:"cost"`
 }
 
 type requestLogsResponse struct {
@@ -179,19 +179,19 @@ type requestLogsResponse struct {
 
 // ModelStat 对应 /api/usage/models 的单模型聚合
 type ModelStat struct {
-	Model            string  `json:"model"`
-	Provider         string  `json:"provider"`
-	TotalRequests    flexInt `json:"totalRequests"`
-	TotalInputTokens flexInt `json:"totalInputTokens"`
-	TotalOutputTokens flexInt `json:"totalOutputTokens"`
-	TotalCacheRead   flexInt `json:"totalCacheReadTokens"`
-	TotalCacheWrite5m flexInt `json:"totalCacheWrite5mTokens"`
-	TotalCacheWrite1h flexInt `json:"totalCacheWrite1hTokens"`
+	Model               string  `json:"model"`
+	Provider            string  `json:"provider"`
+	TotalRequests       flexInt `json:"totalRequests"`
+	TotalInputTokens    flexInt `json:"totalInputTokens"`
+	TotalOutputTokens   flexInt `json:"totalOutputTokens"`
+	TotalCacheRead      flexInt `json:"totalCacheReadTokens"`
+	TotalCacheWrite5m   flexInt `json:"totalCacheWrite5mTokens"`
+	TotalCacheWrite1h   flexInt `json:"totalCacheWrite1hTokens"`
 	TotalCostMicroCents flexInt `json:"totalCostMicroCents"`
 }
 
 type modelsResponse struct {
-	Items []ModelStat `json:"items"`
+	Items    []ModelStat `json:"items"`
 	PageInfo struct {
 		Page      int `json:"page"`
 		PageSize  int `json:"pageSize"`
@@ -339,8 +339,10 @@ type GoAccess struct {
 
 // GoStatus 对应 GET /console/api/go/status 的返回。
 // 注意：普通组织走 /go/status；/internal/.../go/status 仅用于客服代登录（会 403）。
+// Product 为套餐标识（"go" / "go-plus"），供日后按套餐选择文档额度表。
 type GoStatus struct {
 	SubscriberUserID  string    `json:"subscriberUserId"`
+	Product           string    `json:"product"`
 	UseBalance        bool      `json:"useBalance"`
 	CancelAtPeriodEnd bool      `json:"cancelAtPeriodEnd"`
 	RenewalPending    bool      `json:"renewalPending"`

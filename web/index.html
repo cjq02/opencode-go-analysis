@@ -146,7 +146,7 @@ tr:hover td{background:#fafafa}
         </div>
         <button onclick="copyShareText()" style="padding:7px 14px;border:1px solid #e5e7eb;border-radius:999px;background:#f9fafb;cursor:pointer;font-size:12px;font-weight:600;color:#374151;flex-shrink:0">复制文字</button>
       </div>
-      <div id="shareText" style="padding:14px 18px;font-size:14px;color:#111827;line-height:1.9;white-space:pre-wrap;word-break:break-all;user-select:text;background:#fff;max-height:520px;overflow:auto">{{printf "OpenCode Go %s 各模型满额可用预估汇总\n额度 5h $%.0f / 周 $%.0f / 月 $%.0f · 按当月单价换算（含缓存）\n\n" .QuotaMonth .Quota.FiveHour .Quota.Weekly .Quota.Monthly}}{{range .QuotaRows}}{{printf "%s — 满额 %s tokens (额度 $%.0f · 每亿 $%.2f)\n" .Model (compact .MaxTokensMonthly) .QuotaUSD .Per100M}}{{end}}{{printf "\n来源 opencode.ai/docs/zh-cn/go · 生成 %s" .GeneratedAt}}</div>
+      <div id="shareText" style="padding:14px 18px;font-size:14px;color:#111827;line-height:1.9;white-space:pre-wrap;word-break:break-all;user-select:text;background:#fff;max-height:520px;overflow:auto">{{printf "OpenCode Go %s 各模型满额可用预估汇总\n额度 5h $%.0f / 周 $%.0f / 月 $%.0f · 按当月单价换算（含缓存）\n\n" .QuotaMonth .Quota.FiveHour .Quota.Weekly .Quota.Monthly}}{{range .QuotaRows}}{{printf "%s — 满额 %s tokens (额度 $%.0f · 每亿 $%.2f)\n" .Model (compact .MaxTokensMonthly) .QuotaUSD .Per100M}}{{end}}{{printf "\n来源 opencode.ai/docs/go（新版 /v2/docs/console/go/） · 生成 %s" .GeneratedAt}}</div>
       <div style="padding:8px 16px;background:#fafafb;border-top:1px solid #f3f4f6;font-size:9px;color:#9ca3af;text-align:center">点击“复制文字”粘贴至小红书正文 · 左侧卡片为配图</div>
     </div>
     </div>
@@ -191,6 +191,6 @@ new Chart(document.getElementById('chart-model'),{type:'bar',data:{labels:modLab
 new Chart(document.getElementById('chart-cache'),{type:'bar',data:{labels:cLabels,datasets:[{label:'输入(未命中)',data:cIn,backgroundColor:'#fca5a5'},{label:'缓存读取',data:cRd,backgroundColor:'#86efac'},{label:'缓存写入',data:cWr,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
 new Chart(document.getElementById('chart-daily'),{type:'line',data:{labels:dLabels,datasets:[{label:'每日成本 $',data:dCosts,borderColor:'#0ea5e9',backgroundColor:'rgba(14,165,233,.15)',fill:true,tension:.3}]},options:{responsive:true}});
 new Chart(document.getElementById('chart-peak'),{type:'bar',data:{labels:pLabels,datasets:[{label:'峰成本',data:pCosts,backgroundColor:'#f59e0b'},{label:'谷成本',data:oCosts,backgroundColor:'#10b981'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
-new Chart(document.getElementById('chart-quota'),{type:'bar',data:{labels:qLabels,datasets:[{label:'5h $12',data:q5h,backgroundColor:'#fca5a5'},{label:'周 $30',data:qWeekly,backgroundColor:'#86efac'},{label:'月 $60',data:qMonthly,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:false},y:{beginAtZero:true}}}});
+new Chart(document.getElementById('chart-quota'),{type:'bar',data:{labels:qLabels,datasets:[{label:'5h ${{.Quota.FiveHour}}',data:q5h,backgroundColor:'#fca5a5'},{label:'周 ${{.Quota.Weekly}}',data:qWeekly,backgroundColor:'#86efac'},{label:'月 ${{.Quota.Monthly}}',data:qMonthly,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:false},y:{beginAtZero:true}}}});
 </script>
 </body></html>

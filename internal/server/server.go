@@ -28,12 +28,12 @@ const TABLE_OFFSET = "280px"
 
 // Server 封装本地动态服务的全部状态与路由
 type Server struct {
-	st                *store.Store
-	tmpl              *template.Template
-	ws                string
-	dailyMonDefault   string
-	peakStartDefault  string
-	fetchMu           sync.Mutex
+	st               *store.Store
+	tmpl             *template.Template
+	ws               string
+	dailyMonDefault  string
+	peakStartDefault string
+	fetchMu          sync.Mutex
 }
 
 // New 创建 Server，打开数据库并解析模板
@@ -149,7 +149,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) { s.serveJSON(w, r, "meta") }
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request)  { s.serveJSON(w, r, "meta") }
 func (s *Server) handleMonth(w http.ResponseWriter, r *http.Request) { s.serveJSON(w, r, "month") }
 func (s *Server) handleModel(w http.ResponseWriter, r *http.Request) { s.serveJSON(w, r, "model") }
 
@@ -270,31 +270,31 @@ var currentMonthlyBD *subscription.Breakdown
 var monthlyBDMu sync.RWMutex
 
 type QuotaRow struct {
-	Model            string
-	Count            int64
-	CostUSD          float64
-	InputTokens      int64
-	Per100M          float64 // $ per 100M input tokens
-	QuotaUSD         float64 // 当月按模型额度（来自文档“使用额度”列）
-	MaxTokens5h      int64
-	MaxTokensWeekly  int64
-	MaxTokensMonthly int64
-	UsedPercent      float64 // 已用 / 月满额 *100
-	RemainingTokens  int64
-	RemainingUSD     float64
-	TokensPer1USD    int64 // $1 可使用 tokens
+	Model             string
+	Count             int64
+	CostUSD           float64
+	InputTokens       int64
+	Per100M           float64 // $ per 100M input tokens
+	QuotaUSD          float64 // 当月按模型额度（来自文档“使用额度”列）
+	MaxTokens5h       int64
+	MaxTokensWeekly   int64
+	MaxTokensMonthly  int64
+	UsedPercent       float64 // 已用 / 月满额 *100
+	RemainingTokens   int64
+	RemainingUSD      float64
+	TokensPer1USD     int64 // $1 可使用 tokens
 	TokensPer100Calls int64 // 每百次消耗 tokens = Input / Count *100
 }
 
 type QuotaSummary struct {
-	TotalCount          int64
-	TotalCost           float64
-	TotalQuotaUSD       float64
-	RemainingUSD        float64
-	TotalInput          int64
-	TotalMaxMonthly     int64
-	RemainingTokens     int64
-	UsedPercent         float64
+	TotalCount        int64
+	TotalCost         float64
+	TotalQuotaUSD     float64
+	RemainingUSD      float64
+	TotalInput        int64
+	TotalMaxMonthly   int64
+	RemainingTokens   int64
+	UsedPercent       float64
 	TokensPer100Calls int64
 }
 
@@ -404,47 +404,47 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	}
 	shareTop3, shareCheapest := buildShareData(quotaRows)
 	return map[string]any{
-		"GeneratedAt":     time.Now().Format("2006-01-02 15:04:05"),
-		"Range":           rangeStr,
-		"Total":           format.Thousands(total),
-		"PeakStart":       peakStart,
-		"DailyMonth":      dailyMon,
-		"AvailableMonths": s.availableMonths(ctx),
-		"TableOffset":     TABLE_OFFSET,
-		"MonthRows":       monthRows,
-		"ModelRows":       modelRows,
-		"MonthModelRows":  monthModelRows,
-		"CacheRows":       cacheRows,
-		"DailyRows":       dailyTableRows,
-		"PeakRows":        peakRows,
-		"Quota":           qForTpl,
-		"QuotaMonth":      quotaMonth,
-		"QuotaRows":       quotaRows,
-		"QuotaSummary":    quotaSummary,
-		"ShareTop3":       shareTop3,
-		"ShareCheapest":   shareCheapest,
-		"QuotaCycleLabel": quotaCycleLabel,
-		"Subscription":    subForTpl,
-		"SubCycleStart":   subCycleStart,
-		"SubCycleEnd":     subCycleEnd,
-		"MonthlyBD":       bdForTpl,
-		"MonthLabelsJSON": mustJSON(monthLabels),
-		"MonthCostsJSON":  mustJSON(monthCosts),
-		"MonthCountsJSON": mustJSON(monthCounts),
-		"ModelLabelsJSON": mustJSON(modelLabels),
-		"ModelCostsJSON":  mustJSON(modelCosts),
-		"CacheLabelsJSON": mustJSON(cacheLabels),
-		"CacheInputJSON":  mustJSON(cacheInput),
-		"CacheReadJSON":   mustJSON(cacheRead),
-		"CacheWriteJSON":  mustJSON(cacheWrite),
-		"DailyLabelsJSON": mustJSON(dailyLabels),
-		"DailyCostsJSON":  mustJSON(dailyCosts),
-		"PeakLabelsJSON":  mustJSON(peakLabels),
-		"PeakCostsJSON":   mustJSON(peakCosts),
-		"OffCostsJSON":    mustJSON(offCosts),
-		"QuotaLabelsJSON": mustJSON(qLabels),
-		"Quota5hJSON":     mustJSON(q5h),
-		"QuotaWeeklyJSON": mustJSON(qWeekly),
+		"GeneratedAt":      time.Now().Format("2006-01-02 15:04:05"),
+		"Range":            rangeStr,
+		"Total":            format.Thousands(total),
+		"PeakStart":        peakStart,
+		"DailyMonth":       dailyMon,
+		"AvailableMonths":  s.availableMonths(ctx),
+		"TableOffset":      TABLE_OFFSET,
+		"MonthRows":        monthRows,
+		"ModelRows":        modelRows,
+		"MonthModelRows":   monthModelRows,
+		"CacheRows":        cacheRows,
+		"DailyRows":        dailyTableRows,
+		"PeakRows":         peakRows,
+		"Quota":            qForTpl,
+		"QuotaMonth":       quotaMonth,
+		"QuotaRows":        quotaRows,
+		"QuotaSummary":     quotaSummary,
+		"ShareTop3":        shareTop3,
+		"ShareCheapest":    shareCheapest,
+		"QuotaCycleLabel":  quotaCycleLabel,
+		"Subscription":     subForTpl,
+		"SubCycleStart":    subCycleStart,
+		"SubCycleEnd":      subCycleEnd,
+		"MonthlyBD":        bdForTpl,
+		"MonthLabelsJSON":  mustJSON(monthLabels),
+		"MonthCostsJSON":   mustJSON(monthCosts),
+		"MonthCountsJSON":  mustJSON(monthCounts),
+		"ModelLabelsJSON":  mustJSON(modelLabels),
+		"ModelCostsJSON":   mustJSON(modelCosts),
+		"CacheLabelsJSON":  mustJSON(cacheLabels),
+		"CacheInputJSON":   mustJSON(cacheInput),
+		"CacheReadJSON":    mustJSON(cacheRead),
+		"CacheWriteJSON":   mustJSON(cacheWrite),
+		"DailyLabelsJSON":  mustJSON(dailyLabels),
+		"DailyCostsJSON":   mustJSON(dailyCosts),
+		"PeakLabelsJSON":   mustJSON(peakLabels),
+		"PeakCostsJSON":    mustJSON(peakCosts),
+		"OffCostsJSON":     mustJSON(offCosts),
+		"QuotaLabelsJSON":  mustJSON(qLabels),
+		"Quota5hJSON":      mustJSON(q5h),
+		"QuotaWeeklyJSON":  mustJSON(qWeekly),
 		"QuotaMonthlyJSON": mustJSON(qMonthly),
 	}
 }
@@ -588,8 +588,9 @@ func quotaEstimate(monthRows []struct {
 			q = quota.Default
 		}
 		monthlyQuota := q.GetPerModel(r.Model)
-		max5h := int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour)
-		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * q.Weekly)
+		// 5h/周按该模型月额度的百分比（文档口径 20%/50%），而非全局固定 $12/$30
+		max5h := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.FiveHourPct / 100)
+		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.WeeklyPct / 100)
 		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
 		usedPct := 0.0
 		if maxMonthly > 0 {
@@ -601,19 +602,19 @@ func quotaEstimate(monthRows []struct {
 			tokensPer100Calls = r.InputTokens * 100 / r.Count
 		}
 		out = append(out, QuotaRow{
-			Model:            r.Model,
-			Count:            r.Count,
-			CostUSD:          r.CostUSD,
-			InputTokens:      r.InputTokens,
-			Per100M:          per100M,
-			QuotaUSD:         monthlyQuota,
-			MaxTokens5h:      max5h,
-			MaxTokensWeekly:  maxWeekly,
-			MaxTokensMonthly: maxMonthly,
-			UsedPercent:      usedPct,
-			RemainingTokens:  maxMonthly - r.InputTokens,
-			RemainingUSD:     monthlyQuota - r.CostUSD,
-			TokensPer1USD:    tokensPer1USD,
+			Model:             r.Model,
+			Count:             r.Count,
+			CostUSD:           r.CostUSD,
+			InputTokens:       r.InputTokens,
+			Per100M:           per100M,
+			QuotaUSD:          monthlyQuota,
+			MaxTokens5h:       max5h,
+			MaxTokensWeekly:   maxWeekly,
+			MaxTokensMonthly:  maxMonthly,
+			UsedPercent:       usedPct,
+			RemainingTokens:   maxMonthly - r.InputTokens,
+			RemainingUSD:      monthlyQuota - r.CostUSD,
+			TokensPer1USD:     tokensPer1USD,
 			TokensPer100Calls: tokensPer100Calls,
 		})
 	}
@@ -889,8 +890,9 @@ func quotaEstimateCycle(cycleRows []struct {
 			q = quota.Default
 		}
 		monthlyQuota := q.GetPerModel(r.Model)
-		max5h := int64(float64(r.InputTokens) / r.CostUSD * q.FiveHour)
-		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * q.Weekly)
+		// 5h/周按该模型月额度的百分比（文档口径 20%/50%），而非全局固定 $12/$30
+		max5h := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.FiveHourPct / 100)
+		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.WeeklyPct / 100)
 		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
 		usedPct := 0.0
 		if maxMonthly > 0 {
@@ -902,19 +904,19 @@ func quotaEstimateCycle(cycleRows []struct {
 			tokensPer100Calls = r.InputTokens * 100 / r.Count
 		}
 		out = append(out, QuotaRow{
-			Model:            r.Model,
-			Count:            r.Count,
-			CostUSD:          r.CostUSD,
-			InputTokens:      r.InputTokens,
-			Per100M:          per100M,
-			QuotaUSD:         monthlyQuota,
-			MaxTokens5h:      max5h,
-			MaxTokensWeekly:  maxWeekly,
-			MaxTokensMonthly: maxMonthly,
-			UsedPercent:      usedPct,
-			RemainingTokens:  maxMonthly - r.InputTokens,
-			RemainingUSD:     monthlyQuota - r.CostUSD,
-			TokensPer1USD:    tokensPer1USD,
+			Model:             r.Model,
+			Count:             r.Count,
+			CostUSD:           r.CostUSD,
+			InputTokens:       r.InputTokens,
+			Per100M:           per100M,
+			QuotaUSD:          monthlyQuota,
+			MaxTokens5h:       max5h,
+			MaxTokensWeekly:   maxWeekly,
+			MaxTokensMonthly:  maxMonthly,
+			UsedPercent:       usedPct,
+			RemainingTokens:   maxMonthly - r.InputTokens,
+			RemainingUSD:      monthlyQuota - r.CostUSD,
+			TokensPer1USD:     tokensPer1USD,
 			TokensPer100Calls: tokensPer100Calls,
 		})
 	}
@@ -950,17 +952,20 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 			CostUSD     float64
 		}{r.Count, r.InputTokens, r.CostUSD}
 	}
-	// 5h/周/月限额比例固定为文档口径：月 100%、周 50%、5 小时 20%。
-	// 新版 console API 不再返回 token 限额，用标称月限额 6e9 换算比例即可。
-	var limit5h, limitWeekly, limitMonthly int64 = 1200000000, 3000000000, 6000000000
-	if bd.Limit > 0 {
-		limitMonthly = bd.Limit
-	}
+	// 5h/周/月窗口占月限额比例：新版文档口径 20%/50%/100%（每模型独立额度）。
+	// 新版 console API 不再返回 token 限额，用比例换算即可。
 	quotaMu.RLock()
 	q := currentQuota
 	quotaMu.RUnlock()
 	if q.FiveHour == 0 {
 		q = quota.Default
+	}
+	pct5h, pctWeekly := q.FiveHourPct, q.WeeklyPct
+	if pct5h <= 0 {
+		pct5h = 20
+	}
+	if pctWeekly <= 0 {
+		pctWeekly = 50
 	}
 	buildRow := func(displayModel string, count int64, costUSD float64, inputTokens int64) (QuotaRow, bool) {
 		if inputTokens <= 0 || costUSD <= 0 {
@@ -972,13 +977,8 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 		var maxMonthly, maxWeekly, max5h int64
 		if per100M > 0 {
 			maxMonthly = int64(monthlyQuotaUSD / per100M * 1e8)
-			if limitMonthly > 0 {
-				maxWeekly = int64(float64(maxMonthly) * float64(limitWeekly) / float64(limitMonthly))
-				max5h = int64(float64(maxMonthly) * float64(limit5h) / float64(limitMonthly))
-			} else {
-				maxWeekly = int64(q.Weekly / per100M * 1e8)
-				max5h = int64(q.FiveHour / per100M * 1e8)
-			}
+			maxWeekly = int64(float64(maxMonthly) * pctWeekly / 100)
+			max5h = int64(float64(maxMonthly) * pct5h / 100)
 		}
 		usedPct := float64(costUSD) / monthlyQuotaUSD * 100
 		tokensPer1USD := int64(float64(inputTokens) / costUSD)
@@ -1246,14 +1246,14 @@ func dailyChartData(rows []store.DailyModelRow) ([]string, []float64) {
 }
 
 func peakChartData(rows []struct {
-	Day                       string
-	Total                     int64
-	PeakCalls                 int64
-	PeakCost                  float64
-	PeakInput, PeakOutput     int64
-	OffCalls                  int64
-	OffCost                   float64
-	OffInput, OffOutput       int64
+	Day                   string
+	Total                 int64
+	PeakCalls             int64
+	PeakCost              float64
+	PeakInput, PeakOutput int64
+	OffCalls              int64
+	OffCost               float64
+	OffInput, OffOutput   int64
 }) ([]string, []float64, []float64) {
 	var l []string
 	var p, o []float64
