@@ -654,21 +654,31 @@ var modelAliases = map[string]string{
 	"deepseek-flash": "deepseek-v4.1-flash",
 }
 
-// splitPeakSuffix 拆分 DeepSeek 峰谷显示后缀 " (Peak)" / " (Off-Peak)"。
+// normPeakSuffix 将半角峰谷后缀统一为全角，保证 dbMap 键与全角显示名一致。
+func normPeakSuffix(s string) string {
+	s = strings.ReplaceAll(s, " (Peak)", " （Peak）")
+	return strings.ReplaceAll(s, " (Off-Peak)", " （Off-Peak）")
+}
+
+// splitPeakSuffix 拆分 DeepSeek 峰谷显示后缀 " （Peak）" / " （Off-Peak）"（兼容半角）。
 func splitPeakSuffix(m string) (base, suffix string) {
 	if i := strings.LastIndex(m, " ("); i >= 0 && strings.HasSuffix(m, ")") {
+		return m[:i], m[i:]
+	}
+	if i := strings.LastIndex(m, " （"); i >= 0 && strings.HasSuffix(m, "）") {
 		return m[:i], m[i:]
 	}
 	return m, ""
 }
 
-// canonicalModel 返回归一后的模型 ID（保留峰谷后缀，匹配大小写不敏感）。
+// canonicalModel 返回归一后的模型 ID（保留峰谷后缀，匹配大小写不敏感），
+// 输出后缀统一为全角，保证与 expandCycleRowsWithPeak 的显示名同键。
 func canonicalModel(m string) string {
 	base, suffix := splitPeakSuffix(m)
 	if alias, ok := modelAliases[strings.ToLower(strings.TrimSpace(base))]; ok {
-		return alias + suffix
+		return normPeakSuffix(alias + suffix)
 	}
-	return m
+	return normPeakSuffix(m)
 }
 
 // mergeCycleRowsByCanonical 将周期聚合按 canonicalModel() 归一并合并（各项求和，保持首次出现顺序）。
@@ -767,7 +777,7 @@ func mergeSplitRowsByCanonical(rows []struct {
 }
 
 // expandCycleRowsWithPeak 将周期聚合中的 deepseek 行按峰/谷拆分为两行。
-// 显示名沿用文档口径 "model (Peak)" / "model (Off-Peak)"，quota.GetPerModel 会去掉括号取同一额度。
+// 显示名沿用文档口径 "model （Peak）" / "model （Off-Peak）"，quota.GetPerModel 会去掉括号取同一额度。
 func expandCycleRowsWithPeak(cycleRows []struct {
 	Model           string
 	Count           int64
@@ -852,7 +862,7 @@ func expandCycleRowsWithPeak(cycleRows []struct {
 			CacheRead       int64
 			CacheWrite5m    int64
 			CacheWrite1h    int64
-		}{Model: r.Model + " (Peak)", Count: sp.peakCount, CostUSD: sp.peakCost, InputTokens: sp.peakInput})
+		}{Model: r.Model + " （Peak）", Count: sp.peakCount, CostUSD: sp.peakCost, InputTokens: sp.peakInput})
 		out = append(out, struct {
 			Model           string
 			Count           int64
@@ -863,7 +873,7 @@ func expandCycleRowsWithPeak(cycleRows []struct {
 			CacheRead       int64
 			CacheWrite5m    int64
 			CacheWrite1h    int64
-		}{Model: r.Model + " (Off-Peak)", Count: sp.offCount, CostUSD: sp.offCost, InputTokens: sp.offInput})
+		}{Model: r.Model + " （Off-Peak）", Count: sp.offCount, CostUSD: sp.offCost, InputTokens: sp.offInput})
 	}
 	return out
 }
@@ -968,7 +978,7 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 		CostUSD     float64
 	}{}
 	for _, r := range cycleRows {
-		dbMap[r.Model] = struct {
+		dbMap[normPeakSuffix(r.Model)] = struct {
 			Count       int64
 			InputTokens int64
 			CostUSD     float64
@@ -994,7 +1004,7 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 			return QuotaRow{}, false
 		}
 		per100M := costUSD / float64(inputTokens) * 1e8
-		// 周期额度取文档的每模型每月配额（GetPerModel 会去掉 " (Peak)" 后缀，峰/谷同额度，如 flash $30）
+		// 周期额度取文档的每模型每月配额（GetPerModel 会去掉 " （Peak）" 后缀，峰/谷同额度，如 flash $30）
 		monthlyQuotaUSD := q.GetPerModel(displayModel)
 		var maxMonthly, maxWeekly, max5h int64
 		if per100M > 0 {
@@ -1048,18 +1058,18 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 		merged = append(merged, mb)
 	}
 	for _, mb := range merged {
-		// DeepSeek 在 cycleRows 中已拆为 "(Peak)" / "(Off-Peak)" 两行，此处分别建行
+		// DeepSeek 在 cycleRows 中已拆为 "（Peak）" / "（Off-Peak）" 两行，此处分别建行
 		if isDeepSeekModel(mb.Model) {
-			peakEntry, hasPeak := dbMap[mb.Model+" (Peak)"]
-			offEntry, hasOff := dbMap[mb.Model+" (Off-Peak)"]
+			peakEntry, hasPeak := dbMap[mb.Model+" （Peak）"]
+			offEntry, hasOff := dbMap[mb.Model+" （Off-Peak）"]
 			if hasPeak || hasOff {
 				if hasPeak {
-					if row, ok := buildRow(mb.Model+" (Peak)", peakEntry.Count, peakEntry.CostUSD, peakEntry.InputTokens); ok {
+					if row, ok := buildRow(mb.Model+" （Peak）", peakEntry.Count, peakEntry.CostUSD, peakEntry.InputTokens); ok {
 						out = append(out, row)
 					}
 				}
 				if hasOff {
-					if row, ok := buildRow(mb.Model+" (Off-Peak)", offEntry.Count, offEntry.CostUSD, offEntry.InputTokens); ok {
+					if row, ok := buildRow(mb.Model+" （Off-Peak）", offEntry.Count, offEntry.CostUSD, offEntry.InputTokens); ok {
 						out = append(out, row)
 					}
 				}

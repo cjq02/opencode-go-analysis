@@ -79,8 +79,8 @@ func TestCanonicalModel(t *testing.T) {
 	for in, want := range map[string]string{
 		"deepseek-flash":            "deepseek-v4.1-flash",
 		"DeepSeek-Flash":            "deepseek-v4.1-flash",
-		"deepseek-flash (Peak)":     "deepseek-v4.1-flash (Peak)",
-		"deepseek-flash (Off-Peak)": "deepseek-v4.1-flash (Off-Peak)",
+		"deepseek-flash (Peak)":     "deepseek-v4.1-flash （Peak）",
+		"deepseek-flash (Off-Peak)": "deepseek-v4.1-flash （Off-Peak）",
 		"deepseek-v4.1-flash":       "deepseek-v4.1-flash",
 		"deepseek-v4-flash":         "deepseek-v4-flash",
 		"glm-5.3-flash":             "glm-5.3-flash",
@@ -163,11 +163,11 @@ func TestDeepseekFlashPeakSplitMerged(t *testing.T) {
 	for _, r := range rows {
 		byModel[r.Model] = r
 	}
-	peak, ok := byModel["deepseek-v4.1-flash (Peak)"]
+	peak, ok := byModel["deepseek-v4.1-flash （Peak）"]
 	if !ok {
 		t.Fatalf("missing Peak row: %+v", rows)
 	}
-	off, ok := byModel["deepseek-v4.1-flash (Off-Peak)"]
+	off, ok := byModel["deepseek-v4.1-flash （Off-Peak）"]
 	if !ok {
 		t.Fatalf("missing Off-Peak row: %+v", rows)
 	}

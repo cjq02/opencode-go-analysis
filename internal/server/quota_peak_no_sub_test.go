@@ -97,7 +97,7 @@ func TestQuotaPeakSplitSurvivesMissingSubscription(t *testing.T) {
 	for _, r := range rows {
 		got[r.Model] = r
 	}
-	for _, want := range []string{"deepseek-v4.1-flash (Peak)", "deepseek-v4.1-flash (Off-Peak)"} {
+	for _, want := range []string{"deepseek-v4.1-flash （Peak）", "deepseek-v4.1-flash （Off-Peak）"} {
 		if _, ok := got[want]; !ok {
 			names := make([]string, 0, len(rows))
 			for _, r := range rows {
@@ -107,14 +107,14 @@ func TestQuotaPeakSplitSurvivesMissingSubscription(t *testing.T) {
 		}
 	}
 	// 拆分后两行各自保留自己的量，不得互相串数
-	if got["deepseek-v4.1-flash (Peak)"].Count != 1 || got["deepseek-v4.1-flash (Off-Peak)"].Count != 1 {
+	if got["deepseek-v4.1-flash （Peak）"].Count != 1 || got["deepseek-v4.1-flash （Off-Peak）"].Count != 1 {
 		t.Errorf("Peak.Count=%d Off.Count=%d, want 1/1",
-			got["deepseek-v4.1-flash (Peak)"].Count, got["deepseek-v4.1-flash (Off-Peak)"].Count)
+			got["deepseek-v4.1-flash （Peak）"].Count, got["deepseek-v4.1-flash （Off-Peak）"].Count)
 	}
 	// 峰单价约为谷的 2 倍（同 tokens 成本 0.44 vs 0.22）
-	if got["deepseek-v4.1-flash (Peak)"].Per100M <= got["deepseek-v4.1-flash (Off-Peak)"].Per100M {
+	if got["deepseek-v4.1-flash （Peak）"].Per100M <= got["deepseek-v4.1-flash （Off-Peak）"].Per100M {
 		t.Errorf("Peak.Per100M=%v 应高于 Off.Per100M=%v",
-			got["deepseek-v4.1-flash (Peak)"].Per100M, got["deepseek-v4.1-flash (Off-Peak)"].Per100M)
+			got["deepseek-v4.1-flash （Peak）"].Per100M, got["deepseek-v4.1-flash （Off-Peak）"].Per100M)
 	}
 	if data["QuotaMonth"] == "" {
 		t.Error("QuotaMonth 不应为空（应为周期窗口标签）")

@@ -219,8 +219,8 @@ func stripTags(s string) string {
 }
 
 func normalizeModel(s string) string {
-	// 去掉括号及内容，如 "DeepSeek V4 Flash (Off-Peak)" -> "DeepSeek V4 Flash"
-	if idx := strings.Index(s, "("); idx >= 0 {
+	// 去掉括号及内容（兼容半角/全角），如 "DeepSeek V4 Flash （Off-Peak）" -> "DeepSeek V4 Flash"
+	if idx := strings.IndexAny(s, "(（"); idx >= 0 {
 		s = s[:idx]
 	}
 	s = strings.TrimSpace(s)
