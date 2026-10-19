@@ -319,7 +319,6 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	monthModelRows, _ := s.st.Query(ctx, s.ws)
 	cacheRows, _ := s.st.CacheStats(ctx, s.ws)
 	dailyRows, _ := s.st.DailyModelStats(ctx, s.ws, dailyMon)
-	dailyTableRows := store.WithDailySubtotals(dailyRows)
 	peakRows, _ := s.st.DeepseekPeak(ctx, s.ws, peakStart)
 	monthLabels, monthCosts, monthCounts := labelsCosts(monthRows)
 	modelLabels, modelCosts := modelLabelsCosts(modelRows)
@@ -332,6 +331,17 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	if qForTpl.FiveHour == 0 {
 		qForTpl = quota.Default
 	}
+	// 当日使用百分比：当日成本 / 该模型月额度 × 100，与满额预估页“已用百分比”同口径。
+	// 小计行由 WithDailySubtotals 累加各模型占比得到（等价于按额度加权汇总）。
+	for i := range dailyRows {
+		if dailyRows[i].IsSubtotal {
+			continue
+		}
+		if q := qForTpl.GetPerModel(dailyRows[i].Model); q > 0 {
+			dailyRows[i].UsedPercent = dailyRows[i].CostUSD / q * 100
+		}
+	}
+	dailyTableRows := store.WithDailySubtotals(dailyRows)
 	subMu.RLock()
 	subForTpl := currentSub
 	subMu.RUnlock()

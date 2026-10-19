@@ -524,6 +524,9 @@ type DailyModelRow struct {
 	CacheWrite5m     int64
 	CacheWrite1h     int64
 	IsSubtotal       bool
+	// UsedPercent 当日该模型成本 / 该模型月额度 × 100（小计行为当日各模型占比之和，
+	// 与满额预估页“已用百分比”同口径）。由 server 侧按额度回填，store 不负责计算。
+	UsedPercent float64
 }
 
 // DailyModelStats 按指定月份(YYYY-MM)的每天x模型分组统计
@@ -567,7 +570,7 @@ func WithDailySubtotals(rows []DailyModelRow) []DailyModelRow {
 	out := make([]DailyModelRow, 0, len(rows)+len(rows)/3+1)
 	var curDay string
 	var sCnt, sIn, sOut, sReason, sCacheR, sCacheW5, sCacheW1 int64
-	var sCost float64
+	var sCost, sPct float64
 	flush := func() {
 		if curDay == "" {
 			return
@@ -576,7 +579,7 @@ func WithDailySubtotals(rows []DailyModelRow) []DailyModelRow {
 			Day: curDay, Count: sCnt, CostUSD: sCost,
 			InputTokens: sIn, OutputTokens: sOut, ReasoningTokens: sReason,
 			CacheRead: sCacheR, CacheWrite5m: sCacheW5, CacheWrite1h: sCacheW1,
-			IsSubtotal: true,
+			IsSubtotal: true, UsedPercent: sPct,
 		})
 	}
 	for _, r := range rows {
@@ -586,7 +589,7 @@ func WithDailySubtotals(rows []DailyModelRow) []DailyModelRow {
 		if r.Day != curDay {
 			flush()
 			curDay = r.Day
-			sCnt, sCost, sIn, sOut, sReason, sCacheR, sCacheW5, sCacheW1 = 0, 0, 0, 0, 0, 0, 0, 0
+			sCnt, sCost, sIn, sOut, sReason, sCacheR, sCacheW5, sCacheW1, sPct = 0, 0, 0, 0, 0, 0, 0, 0, 0
 		}
 		sCnt += r.Count
 		sCost += r.CostUSD
@@ -596,6 +599,7 @@ func WithDailySubtotals(rows []DailyModelRow) []DailyModelRow {
 		sCacheR += r.CacheRead
 		sCacheW5 += r.CacheWrite5m
 		sCacheW1 += r.CacheWrite1h
+		sPct += r.UsedPercent
 		out = append(out, r)
 	}
 	flush()

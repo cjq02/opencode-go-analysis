@@ -356,7 +356,7 @@ const pLabels={{.PeakLabelsJSON}}, pCosts={{.PeakCostsJSON}}, oCosts={{.OffCosts
 new Chart(document.getElementById('chart-month'),{type:'bar',data:{labels:mLabels,datasets:[{label:'成本 $',data:mCosts,yAxisID:'y',type:'line',borderColor:'#4f46e5',tension:.3},{label:'调用次数',data:mCounts,yAxisID:'y1',backgroundColor:'#e0e7ff'}]},options:{responsive:true,interaction:{mode:'index',intersect:false},scales:{y:{type:'linear',position:'left'},y1:{type:'linear',position:'right',grid:{drawOnChartArea:false}}}}});
 new Chart(document.getElementById('chart-model'),{type:'bar',data:{labels:modLabels,datasets:[{label:'成本 $',data:modCosts,backgroundColor:'#6366f1'}]},options:{responsive:true,plugins:{legend:{display:false}}}});
 new Chart(document.getElementById('chart-cache'),{type:'bar',data:{labels:cLabels,datasets:[{label:'输入(未命中)',data:cIn,backgroundColor:'#fca5a5'},{label:'缓存读取',data:cRd,backgroundColor:'#86efac'},{label:'缓存写入',data:cWr,backgroundColor:'#93c5fd'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
-new Chart(document.getElementById('chart-daily'),{type:'line',data:{labels:dLabels,datasets:[{label:'每日成本 $',data:dCosts,borderColor:'#0ea5e9',backgroundColor:'rgba(14,165,233,.15)',fill:true,tension:.3}]},options:{responsive:true}});
+new Chart(document.getElementById('chart-daily'),{type:'bar',data:{labels:dLabels,datasets:[{label:'每日成本 $',data:dCosts,backgroundColor:'#0ea5e9'}]},options:{responsive:true}});
 new Chart(document.getElementById('chart-peak'),{type:'bar',data:{labels:pLabels,datasets:[{label:'峰成本',data:pCosts,backgroundColor:'#f59e0b'},{label:'谷成本',data:oCosts,backgroundColor:'#10b981'}]},options:{responsive:true,scales:{x:{stacked:true},y:{stacked:true}}}});
 </script>
 </body></html>
