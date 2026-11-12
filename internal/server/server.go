@@ -312,6 +312,9 @@ type QuotaSummary struct {
 	// 日均可用百分比：剩余额度/剩余天数/总额度×100；当天已用百分比：今日成本/月额度
 	DailyAvailablePct float64
 	TodayUsedPct      float64
+	TodayCost         float64
+	// 日均可用额度（USD）：按当天已用额度推算，保证与当天已用百分比同一基准
+	DailyAvailableUSD float64
 	// 进度条宽度：按两者较大值等比缩放，便于上下两条直接对比
 	DailyAvailableBarPct float64
 	TodayUsedBarPct      float64
@@ -461,10 +464,18 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	// 不能直接用今日总成本 / 总月额度：各模型月额度不同，会与每日页签对不上。
 	if dayRows, err := s.st.DayModelCosts(ctx, s.ws, time.Now().UTC().Format("2006-01-02")); err == nil {
 		for _, r := range dayRows {
+			quotaSummary.TodayCost += r.CostUSD
 			if q := qForTpl.GetPerModel(r.Model); q > 0 {
 				quotaSummary.TodayUsedPct += r.CostUSD / q * 100
 			}
 		}
+	}
+	// 日均可用额度：用当天已用额度反推同一基准（今日成本 / 当天已用百分比），
+	// 再乘以日均可用百分比，避免两个“额度”基准不一致。
+	if quotaSummary.TodayUsedPct > 0 {
+		quotaSummary.DailyAvailableUSD = quotaSummary.TodayCost * quotaSummary.DailyAvailablePct / quotaSummary.TodayUsedPct
+	} else if quotaSummary.RemainingDays > 0 {
+		quotaSummary.DailyAvailableUSD = quotaSummary.RemainingUSD / quotaSummary.RemainingDays
 	}
 	// 两条进度条按较大值等比缩放，避免个位数百分比都缩成细线，方便上下直接对比。
 	maxPct := quotaSummary.DailyAvailablePct

@@ -122,12 +122,12 @@ tr:hover td{background:#fafafa}
         <div style="display:flex;align-items:center;gap:10px">
           <span style="color:#6b7280;white-space:nowrap;text-align:right;min-width:98px">日均可用百分比</span>
           <div style="flex:1;min-width:80px;height:7px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div style="width:{{printf "%.1f" .QuotaSummary.DailyAvailableBarPct}}%;height:100%;background:#10b981"></div></div>
-          <span style="flex:0 0 64px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">{{printf "%.2f%%" .QuotaSummary.DailyAvailablePct}}</span>
+          <span style="flex:0 0 132px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">{{printf "%.2f%%" .QuotaSummary.DailyAvailablePct}}<span style="color:#9ca3af">（{{thousandsF .QuotaSummary.DailyAvailableUSD}}）</span></span>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <span style="color:#6b7280;white-space:nowrap;text-align:right;min-width:98px">当天已用百分比</span>
           <div style="flex:1;min-width:80px;height:7px;background:#e5e7eb;border-radius:999px;overflow:hidden"><div style="width:{{printf "%.1f" .QuotaSummary.TodayUsedBarPct}}%;height:100%;background:#f59e0b"></div></div>
-          <span style="flex:0 0 64px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">{{printf "%.2f%%" .QuotaSummary.TodayUsedPct}}</span>
+          <span style="flex:0 0 132px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap">{{printf "%.2f%%" .QuotaSummary.TodayUsedPct}}<span style="color:#9ca3af">（{{thousandsF .QuotaSummary.TodayCost}}）</span></span>
         </div>
       </div>
     </div>
