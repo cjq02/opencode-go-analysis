@@ -561,14 +561,35 @@ GROUP BY day, model ORDER BY day DESC, 3 DESC`, workspaceID, monthPrefix)
 	return out, rows.Err()
 }
 
-// DayCost 统计某天（UTC，YYYY-MM-DD，与 DailyModelStats 同口径）的总成本（美元）。
-func (s *Store) DayCost(ctx context.Context, workspaceID, day string) (float64, error) {
-	var v float64
-	err := s.db.QueryRowContext(ctx, `
-SELECT COALESCE(SUM(cost_raw),0)/1e8 FROM usage_records
-WHERE workspace_id = ? AND strftime('%Y-%m-%d', time_created/1000, 'unixepoch') = ?`,
-		workspaceID, day).Scan(&v)
-	return v, err
+// DayModelCosts 统计某天（UTC，YYYY-MM-DD，与 DailyModelStats 同口径）各模型成本（美元）。
+// 用于与「每日」页签同一口径计算当日已用百分比（按模型额度加权）。
+func (s *Store) DayModelCosts(ctx context.Context, workspaceID, day string) ([]struct {
+	Model   string
+	CostUSD float64
+}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT model, SUM(cost_raw)/1e8 FROM usage_records
+WHERE workspace_id = ? AND strftime('%Y-%m-%d', time_created/1000, 'unixepoch') = ?
+GROUP BY model`, workspaceID, day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []struct {
+		Model   string
+		CostUSD float64
+	}
+	for rows.Next() {
+		var r struct {
+			Model   string
+			CostUSD float64
+		}
+		if err := rows.Scan(&r.Model, &r.CostUSD); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // WithDailySubtotals 在每天x模型行之间插入每日小计行（IsSubtotal=true，紧随当日各模型行之后）。

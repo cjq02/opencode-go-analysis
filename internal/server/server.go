@@ -457,9 +457,14 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 	if quotaSummary.RemainingDays > 0 && quotaSummary.TotalQuotaUSD > 0 {
 		quotaSummary.DailyAvailablePct = quotaSummary.RemainingUSD / quotaSummary.RemainingDays / quotaSummary.TotalQuotaUSD * 100
 	}
-	// 当天已用百分比：今日成本 / 月额度，与每日页签“当日使用百分比”同口径。
-	if cost, err := s.st.DayCost(ctx, s.ws, time.Now().UTC().Format("2006-01-02")); err == nil && quotaSummary.TotalQuotaUSD > 0 {
-		quotaSummary.TodayUsedPct = cost / quotaSummary.TotalQuotaUSD * 100
+	// 当天已用百分比：与「每日」页签同口径 —— Σ(各模型今日成本 / 该模型月额度 × 100)。
+	// 不能直接用今日总成本 / 总月额度：各模型月额度不同，会与每日页签对不上。
+	if dayRows, err := s.st.DayModelCosts(ctx, s.ws, time.Now().UTC().Format("2006-01-02")); err == nil {
+		for _, r := range dayRows {
+			if q := qForTpl.GetPerModel(r.Model); q > 0 {
+				quotaSummary.TodayUsedPct += r.CostUSD / q * 100
+			}
+		}
 	}
 	// 两条进度条按较大值等比缩放，避免个位数百分比都缩成细线，方便上下直接对比。
 	maxPct := quotaSummary.DailyAvailablePct
