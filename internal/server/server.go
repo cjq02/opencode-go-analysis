@@ -306,6 +306,15 @@ type QuotaSummary struct {
 	// 周期时间进度：剩余天数与剩余占比（仅在有订阅周期时有意义）
 	RemainingDays    float64
 	RemainingDaysPct float64
+	// 已用天数与已用占比（剩余天数取反，便于和已用占比上下对比）
+	UsedDays    float64
+	UsedDaysPct float64
+	// 日均可用百分比：剩余额度/剩余天数/总额度×100；当天已用百分比：今日成本/月额度
+	DailyAvailablePct float64
+	TodayUsedPct      float64
+	// 进度条宽度：按两者较大值等比缩放，便于上下两条直接对比
+	DailyAvailableBarPct float64
+	TodayUsedBarPct      float64
 }
 
 // buildData 组装模板数据（表格降序，图表升序）
@@ -433,7 +442,33 @@ func (s *Server) buildData(ctx context.Context, dailyMon, peakStart string) map[
 			}
 			quotaSummary.RemainingDays = remain / 86400
 			quotaSummary.RemainingDaysPct = remain / total * 100
+			quotaSummary.UsedDays = total/86400 - quotaSummary.RemainingDays
+			quotaSummary.UsedDaysPct = 100 - quotaSummary.RemainingDaysPct
+			if quotaSummary.UsedDays < 0 {
+				quotaSummary.UsedDays = 0
+			}
+			if quotaSummary.UsedDaysPct < 0 {
+				quotaSummary.UsedDaysPct = 0
+			}
 		}
+	}
+	// 日均可用百分比：剩余额度 / 剩余天数 / 总额度 × 100
+	// （即每天平均可消耗掉总剩余额度的百分之几；周期结束后不再有意义）。
+	if quotaSummary.RemainingDays > 0 && quotaSummary.TotalQuotaUSD > 0 {
+		quotaSummary.DailyAvailablePct = quotaSummary.RemainingUSD / quotaSummary.RemainingDays / quotaSummary.TotalQuotaUSD * 100
+	}
+	// 当天已用百分比：今日成本 / 月额度，与每日页签“当日使用百分比”同口径。
+	if cost, err := s.st.DayCost(ctx, s.ws, time.Now().UTC().Format("2006-01-02")); err == nil && quotaSummary.TotalQuotaUSD > 0 {
+		quotaSummary.TodayUsedPct = cost / quotaSummary.TotalQuotaUSD * 100
+	}
+	// 两条进度条按较大值等比缩放，避免个位数百分比都缩成细线，方便上下直接对比。
+	maxPct := quotaSummary.DailyAvailablePct
+	if quotaSummary.TodayUsedPct > maxPct {
+		maxPct = quotaSummary.TodayUsedPct
+	}
+	if maxPct > 0 {
+		quotaSummary.DailyAvailableBarPct = quotaSummary.DailyAvailablePct / maxPct * 100
+		quotaSummary.TodayUsedBarPct = quotaSummary.TodayUsedPct / maxPct * 100
 	}
 	return map[string]any{
 		"GeneratedAt":      time.Now().Format("2006-01-02 15:04:05"),
