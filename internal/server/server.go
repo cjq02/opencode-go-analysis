@@ -655,15 +655,28 @@ func quotaEstimate(monthRows []struct {
 			q = quota.Default
 		}
 		monthlyQuota := q.GetPerModel(r.Model)
+		// DeepSeek 峰/谷按文档单价 + 文档典型请求结构换算满额 tokens（口径同 quotaEstimateFromBreakdown）。
+		docPer100M, docMaxMonthly, isDocPriced := quota.DeepSeekEstimate(r.Model, monthlyQuota)
+		if isDocPriced {
+			per100M = docPer100M
+		}
+		maxMonthly := int64(0)
+		if isDocPriced {
+			maxMonthly = docMaxMonthly
+		} else if per100M > 0 {
+			maxMonthly = int64(monthlyQuota / per100M * 1e8)
+		}
 		// 5h/周按该模型月额度的百分比（文档口径 20%/50%），而非全局固定 $12/$30
-		max5h := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.FiveHourPct / 100)
-		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.WeeklyPct / 100)
-		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
+		max5h := int64(float64(maxMonthly) * q.FiveHourPct / 100)
+		maxWeekly := int64(float64(maxMonthly) * q.WeeklyPct / 100)
 		usedPct := 0.0
 		if maxMonthly > 0 {
 			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
 		}
-		tokensPer1USD := int64(float64(r.InputTokens) / r.CostUSD)
+		var tokensPer1USD int64
+		if per100M > 0 {
+			tokensPer1USD = int64(1e8 / per100M)
+		}
 		tokensPer100Calls := int64(0)
 		if r.Count > 0 {
 			tokensPer100Calls = r.InputTokens * 100 / r.Count
@@ -967,15 +980,28 @@ func quotaEstimateCycle(cycleRows []struct {
 			q = quota.Default
 		}
 		monthlyQuota := q.GetPerModel(r.Model)
+		// DeepSeek 峰/谷按文档单价 + 文档典型请求结构换算满额 tokens（口径同 quotaEstimateFromBreakdown）。
+		docPer100M, docMaxMonthly, isDocPriced := quota.DeepSeekEstimate(r.Model, monthlyQuota)
+		if isDocPriced {
+			per100M = docPer100M
+		}
+		maxMonthly := int64(0)
+		if isDocPriced {
+			maxMonthly = docMaxMonthly
+		} else if per100M > 0 {
+			maxMonthly = int64(monthlyQuota / per100M * 1e8)
+		}
 		// 5h/周按该模型月额度的百分比（文档口径 20%/50%），而非全局固定 $12/$30
-		max5h := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.FiveHourPct / 100)
-		maxWeekly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota * q.WeeklyPct / 100)
-		maxMonthly := int64(float64(r.InputTokens) / r.CostUSD * monthlyQuota)
+		max5h := int64(float64(maxMonthly) * q.FiveHourPct / 100)
+		maxWeekly := int64(float64(maxMonthly) * q.WeeklyPct / 100)
 		usedPct := 0.0
 		if maxMonthly > 0 {
 			usedPct = float64(r.InputTokens) / float64(maxMonthly) * 100
 		}
-		tokensPer1USD := int64(float64(r.InputTokens) / r.CostUSD)
+		var tokensPer1USD int64
+		if per100M > 0 {
+			tokensPer1USD = int64(1e8 / per100M)
+		}
 		tokensPer100Calls := int64(0)
 		if r.Count > 0 {
 			tokensPer100Calls = r.InputTokens * 100 / r.Count
@@ -1049,16 +1075,29 @@ func quotaEstimateFromBreakdown(bd *subscription.Breakdown, cycleRows []struct {
 			return QuotaRow{}, false
 		}
 		per100M := costUSD / float64(inputTokens) * 1e8
-		// 周期额度取文档的每模型每月配额（GetPerModel 会去掉 " （Peak）" 后缀，峰/谷同额度，如 flash $30）
+		// 周期额度取文档的每模型每月配额（GetPerModel 会去掉 " （Peak）" 后缀，峰/谷同额度）。
 		monthlyQuotaUSD := q.GetPerModel(displayModel)
+		// DeepSeek 峰/谷按文档单价 + 文档典型请求结构换算满额 tokens：
+		// 若沿用实际混合成本，峰时更高的缓存命中率会抵消 2 倍峰价，两行满额几乎相同。
+		docPer100M, docMaxMonthly, isDocPriced := quota.DeepSeekEstimate(displayModel, monthlyQuotaUSD)
+		if isDocPriced {
+			per100M = docPer100M
+		}
 		var maxMonthly, maxWeekly, max5h int64
-		if per100M > 0 {
+		if isDocPriced {
+			maxMonthly = docMaxMonthly
+		} else if per100M > 0 {
 			maxMonthly = int64(monthlyQuotaUSD / per100M * 1e8)
+		}
+		if maxMonthly > 0 {
 			maxWeekly = int64(float64(maxMonthly) * pctWeekly / 100)
 			max5h = int64(float64(maxMonthly) * pct5h / 100)
 		}
 		usedPct := float64(costUSD) / monthlyQuotaUSD * 100
-		tokensPer1USD := int64(float64(inputTokens) / costUSD)
+		var tokensPer1USD int64
+		if per100M > 0 {
+			tokensPer1USD = int64(1e8 / per100M)
+		}
 		var tokensPer100Calls int64
 		if count > 0 {
 			tokensPer100Calls = inputTokens * 100 / count

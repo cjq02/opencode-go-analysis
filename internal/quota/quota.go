@@ -62,8 +62,8 @@ var defaultPerModelQuotas = map[string]float64{
 	"qwen3.7-plus":               60,
 	"deepseek-v4-pro":            15,
 	"deepseek-v4-flash":          30,
-	// 限时 4x 提升后文档现为 $80（2026-10-13 实测）
-	"deepseek-v4.1-flash":          80,
+	// 限时 4x 提升后文档现为 $100（2026-11-12 实测）
+	"deepseek-v4.1-flash":          100,
 	"deepseek-v4-flash-vision-exp": 15,
 	"hy4-preview":                  30,
 	"hy3":                          60,
@@ -245,12 +245,60 @@ type DeepSeekPrice struct {
 }
 
 var DeepSeekDocs = map[string]DeepSeekPrice{
+	"deepseek-v4.1-flash (Off-Peak)":          {Input: 0.15, Output: 0.60, CacheRead: 0.003, QuotaUSD: 100},
+	"deepseek-v4.1-flash (Peak)":              {Input: 0.30, Output: 1.20, CacheRead: 0.006, QuotaUSD: 100},
 	"deepseek-v4-flash (Off-Peak)":            {Input: 0.22, Output: 0.66, CacheRead: 0.007, QuotaUSD: 30},
 	"deepseek-v4-flash (Peak)":                {Input: 0.44, Output: 1.32, CacheRead: 0.014, QuotaUSD: 30},
 	"deepseek-v4-flash-vision-exp (Off-Peak)": {Input: 0.22, Output: 0.66, CacheRead: 0.007, QuotaUSD: 15},
 	"deepseek-v4-flash-vision-exp (Peak)":     {Input: 0.44, Output: 1.32, CacheRead: 0.014, QuotaUSD: 15},
 	"deepseek-v4-pro (Off-Peak)":              {Input: 0.66, Output: 1.98, CacheRead: 0.022, QuotaUSD: 15},
 	"deepseek-v4-pro (Peak)":                  {Input: 1.32, Output: 3.96, CacheRead: 0.044, QuotaUSD: 15},
+}
+
+// deepSeekRefMix 文档「Estimated requests」给出的典型单请求结构：
+// 输入（未命中）/ 缓存读取 / 输出 tokens。峰/谷沿用同一结构，
+// 这样按文档单价换算满额 tokens 时能体现「峰价约为谷价 2 倍」，
+// 而不会被各时段实际缓存命中率差异抵消。
+var deepSeekRefMix = map[string][3]float64{
+	"deepseek-v4.1-flash": {410, 71300, 310},
+	"deepseek-v4-pro":     {750, 82000, 290},
+}
+
+// DeepSeekEstimate 按文档单价与典型请求结构估算某峰/谷模型的
+// 每亿输入 tokens 成本（含缓存）与满额可用输入 tokens。
+// model 需带 "（Peak）"/"（Off-Peak）" 后缀；未收录的模型返回 ok=false。
+func DeepSeekEstimate(model string, quotaUSD float64) (per100M float64, maxMonthly int64, ok bool) {
+	lower := strings.ToLower(model)
+	// 仅峰/谷拆分行（带 Peak/Off-Peak 后缀）适用；未拆分的普通行仍用实际成本口径。
+	if !strings.Contains(lower, "peak") {
+		return 0, 0, false
+	}
+	isPeak := !strings.Contains(lower, "off-peak")
+	base := normalizeModel(model)
+	mix, hasMix := deepSeekRefMix[base]
+	if !hasMix {
+		return 0, 0, false
+	}
+	suffix := " (Off-Peak)"
+	if isPeak {
+		suffix = " (Peak)"
+	}
+	p, hasPrice := DeepSeekDocs[base+suffix]
+	if !hasPrice {
+		return 0, 0, false
+	}
+	in, cached, out := mix[0], mix[1], mix[2]
+	tokens := in + cached
+	if tokens <= 0 {
+		return 0, 0, false
+	}
+	// 文档单价为 $/1M tokens；换算成每亿输入 tokens（含缓存）成本。
+	cost := (in*p.Input + cached*p.CacheRead + out*p.Output) / 1e6
+	per100M = cost / tokens * 1e8
+	if quotaUSD > 0 && per100M > 0 {
+		maxMonthly = int64(quotaUSD / per100M * 1e8)
+	}
+	return per100M, maxMonthly, true
 }
 
 // PeakHoursNote 峰时段说明（北京时间）

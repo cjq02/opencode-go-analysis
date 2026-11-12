@@ -1,6 +1,9 @@
 package quota
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // 跨行毒化回归：旧正则的 .*? 会跨 </tr> 抓到别行的值
 // （曾把 DeepSeek V4.1 Flash 解析成 Peak 行输入价 0.3）。
@@ -97,5 +100,26 @@ weekly — 50%; and monthly — 100%.</p>` +
 	// Unlimited 行跳过，GetPerModel 回退 Monthly
 	if got := q.GetPerModel("longcat-2.5-preview-free"); got != 60 {
 		t.Errorf("Unlimited model fallback = %v, want 60", got)
+	}
+}
+
+// 峰/谷满额 tokens 应按文档单价体现约 2 倍价差（而非被实际缓存命中率抹平）。
+func TestDeepSeekEstimatePeakPriceDouble(t *testing.T) {
+	peakPer, peakMax, ok := DeepSeekEstimate("deepseek-v4.1-flash （Peak）", 100)
+	if !ok {
+		t.Fatal("Peak 未命中文档单价")
+	}
+	offPer, offMax, ok := DeepSeekEstimate("deepseek-v4.1-flash （Off-Peak）", 100)
+	if !ok {
+		t.Fatal("Off-Peak 未命中文档单价")
+	}
+	if math.Abs(peakPer/offPer-2) > 0.001 {
+		t.Errorf("Peak/Off 每亿成本比 = %v, want 2", peakPer/offPer)
+	}
+	if math.Abs(float64(offMax)/float64(peakMax)-2) > 0.001 {
+		t.Errorf("Off/Peak 满额比 = %v, want 2", float64(offMax)/float64(peakMax))
+	}
+	if _, _, ok := DeepSeekEstimate("deepseek-v4.1-flash", 100); ok {
+		t.Error("未拆分的普通模型不应套用峰谷单价")
 	}
 }
