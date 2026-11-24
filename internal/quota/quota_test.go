@@ -123,3 +123,43 @@ func TestDeepSeekEstimatePeakPriceDouble(t *testing.T) {
 		t.Error("未拆分的普通模型不应套用峰谷单价")
 	}
 }
+
+// 2026-11 起每模型月限额迁到 Console Go 页：按 data-model 行取 Go 套餐 usage。
+func TestParseConsoleModels(t *testing.T) {
+	html := `<table><tbody>` +
+		`<tr data-hk="1" data-model="deepseek-v4.1-flash" data-layer="model-row">` +
+		`<th><span title="DeepSeek V4.1 Flash 1017">DeepSeek V4.1 Flash 1017</span></th>` +
+		`<td><div data-plan="go" style="--x:1"></div><div data-plan="go-plus"></div></td>` +
+		`<td data-allowance-type="usage"><div><span data-plan="go"><span data-layer="current-value">$100</span></span>` +
+		`<span data-plan="go-plus"><span data-layer="current-value">$200</span></span></div></td></tr>` +
+		`<tr data-hk="2" data-model="glm-5.3" data-layer="model-row">` +
+		`<th>GLM-5.3</th><td data-allowance-type="usage"><div>` +
+		`<span data-plan="go"><span data-layer="current-value">$200</span></span></div></td></tr>` +
+		`<tr data-hk="3" data-model="beam-free" data-layer="model-row">` +
+		`<th>Beam Free</th><td data-allowance-type="usage"><div>` +
+		`<span data-plan="go"><span data-layer="current-value">∞</span></span></div></td></tr>` +
+		`</tbody></table>`
+	got := parseConsoleModels(html)
+	if got["deepseek-v4.1-flash"] != 100 {
+		t.Errorf("deepseek-v4.1-flash = %v, want 100 (Go not Go Plus)", got["deepseek-v4.1-flash"])
+	}
+	if got["glm-5.3"] != 200 {
+		t.Errorf("glm-5.3 = %v, want 200", got["glm-5.3"])
+	}
+	if _, ok := got["beam-free"]; ok {
+		t.Error("∞ 免费模型不应写入额度表")
+	}
+}
+
+// 2026-11 文档改为 "The 5-hour limit is 20% ... The weekly limit is 50% ..."。
+func TestParseNewPctWording(t *testing.T) {
+	html := `<p>The <strong>5-hour limit</strong> is 20% of your monthly allowance.</p>` +
+		`<p>The <strong>weekly limit</strong> is 50% of your monthly allowance.</p>`
+	q, err := Parse(html)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if q.FiveHourPct != 20 || q.WeeklyPct != 50 {
+		t.Errorf("pct = 5h %v / week %v, want 20/50", q.FiveHourPct, q.WeeklyPct)
+	}
+}

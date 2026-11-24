@@ -10,11 +10,15 @@ import (
 	"time"
 )
 
-// 旧版中文文档 /docs/zh-cn/go/ 已 302 到新版英文页（2026-10 实测）。
-const docsURL = "https://opencode.ai/docs/zh-cn/go/"
+// 文档页只保留 5h/周/月占月限额的百分比说明；
+// 每模型月限额已迁到 Console 的 Go 页面（2026-11 实测）。
+const docsURL = "https://opencode.ai/docs/console/go/"
+
+// modelsURL 的 SSR 表格里每行带 data-model 与 Go/Go Plus 的月限额。
+const modelsURL = "https://opencode.ai/console/go"
 
 // Quota 来自文档的额度（USD）。
-// 新版文档（/v2/docs/console/go/）不再给出全局 5h/周/月 $ 金额，
+// 新版文档（/docs/console/go/）不再给出全局 5h/周/月 $ 金额，
 // 而是「每模型各有月限额；5h = 月限额 20%、周 = 50%、月 = 100%」。
 // FiveHour/Weekly/Monthly 为典型单模型口径（$60 × 百分比）供展示与汇总回退，
 // 真正参与满额估算的是 PerModel + FiveHourPct/WeeklyPct。
@@ -38,34 +42,42 @@ var Default = Quota{
 }
 
 // defaultPerModelQuotas 文档 Go 套餐表「Monthly limit」列的硬编码兜底
-// （2026-10-13 与 /v2/docs/console/go/ 一致），避免文档抓取失败时
+// （2026-11-24 与 https://opencode.ai/console/go 一致），避免抓取失败时
 // GetPerModel 回退到 $60 导致“额度都变成 60”。
 var defaultPerModelQuotas = map[string]float64{
+	// 2026-11-24 与 https://opencode.ai/console/go 实测一致
 	"omen-alpha":                 100,
 	"glm-5.3-flash":              60,
-	"glm-5.3":                    15,
+	"glm-5.3":                    200,
 	"glm-5.2":                    60,
 	"kimi-k3":                    15,
+	"kimi-k3.1-pro":              15,
 	"kimi-k2.7-code":             60,
 	"kimi-k2.6":                  60,
+	"longcat-2.5":                60,
 	"longcat-2.0":                60,
 	"mimo-v2.6-flash":            60,
 	"mimo-v2.6-pro":              15,
 	"mimo-v2.5":                  60,
 	"mimo-v2.5-pro":              15,
 	"minimax-m3":                 60,
+	"minimax-m3.1-flash":         20,
 	"minimax-m2.7":               60,
 	"muse-spark-1.3-contributor": 60,
 	"muse-spark-1.2-contributor": 60,
+	"qwen4-max":                  15,
 	"qwen3.8-max":                15,
 	"qwen3.8-flash":              30,
 	"qwen3.7-plus":               60,
 	"deepseek-v4-pro":            15,
 	"deepseek-v4-flash":          30,
-	// 限时 4x 提升后文档现为 $100（2026-11-12 实测）
+	// 限时 4x 提升后为 $100（2026-11 实测）
 	"deepseek-v4.1-flash":          100,
 	"deepseek-v4-flash-vision-exp": 15,
+	"step-5-preview":               15,
+	"gemini-4-argon":               30,
 	"hy4-preview":                  30,
+	"hy4":                          60,
 	"hy3":                          60,
 	"space-bunny":                  30,
 	"grok-4.7":                     15,
@@ -77,24 +89,45 @@ var defaultPerModelQuotas = map[string]float64{
 	"claude-haiku-5.5": 15,
 }
 
-// Fetch 爬取文档解析额度，失败返回 error，调用方可回退 Default
+// Fetch 爬取文档解析额度，失败返回 error，调用方可回退 Default。
+// 百分比取自文档页，每模型月限额取自 Console 的 Go 页面。
 func Fetch(ctx context.Context) (Quota, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", docsURL, nil)
+	docsHTML, err := fetchURL(ctx, docsURL)
+	if err != nil {
+		return Quota{}, err
+	}
+	q, err := Parse(docsHTML)
+	if err != nil {
+		return Quota{}, err
+	}
+	if modelsHTML, err := fetchURL(ctx, modelsURL); err == nil {
+		if pm := parseConsoleModels(modelsHTML); len(pm) > 0 {
+			q.PerModel = pm
+		}
+	}
+	if len(q.PerModel) == 0 {
+		return Quota{}, fmt.Errorf("parse quota failed: no per-model limits")
+	}
+	return q, nil
+}
+
+func fetchURL(ctx context.Context, u string) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
 	req.Header.Set("User-Agent", "opencode-go-analysis/1.0")
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Quota{}, err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return Quota{}, fmt.Errorf("status %d", resp.StatusCode)
+		return "", fmt.Errorf("%s: status %d", u, resp.StatusCode)
 	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Quota{}, err
+		return "", err
 	}
-	return Parse(string(b))
+	return string(b), nil
 }
 
 var (
@@ -106,11 +139,14 @@ var (
 	re5hNew      = regexp.MustCompile(`5\s*小时限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
 	reWeeklyNew  = regexp.MustCompile(`每周限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
 	reMonthlyNew = regexp.MustCompile(`每月限制\s*</strong>[^$0-9]{0,20}\$([0-9]+(?:\.[0-9]+)?)`)
-	// 新版英文文档（2026-10 起）：无全局 $ 金额，只有占月限额的百分比
-	// "Each model has the following usage limits: 5-hour — 20% of the monthly limit;
-	//  weekly — 50%; and monthly — 100%."
-	re5hPct     = regexp.MustCompile(`5-hour\s*[—–-]\s*(\d+)\s*%`)
-	reWeeklyPct = regexp.MustCompile(`weekly\s*[—–-]\s*(\d+)\s*%`)
+	// 新版英文文档：无全局 $ 金额，只有占月限额的百分比。
+	// 2026-10 版："5-hour — 20% of the monthly limit; weekly — 50%; ..."
+	// 2026-11 版："The 5-hour limit is 20% of your monthly allowance.
+	//  The weekly limit is 50% of your monthly allowance."
+	re5hPct        = regexp.MustCompile(`5-hour\s*[—–-]\s*(\d+)\s*%`)
+	reWeeklyPct    = regexp.MustCompile(`weekly\s*[—–-]\s*(\d+)\s*%`)
+	re5hPctNew     = regexp.MustCompile(`5-hour limit is\s*(\d+)\s*%`)
+	reWeeklyPctNew = regexp.MustCompile(`weekly limit is\s*(\d+)\s*%`)
 )
 
 func findQuota(reNew, reOld *regexp.Regexp, html string) string {
@@ -136,11 +172,11 @@ func Parse(html string) (Quota, error) {
 	sM := findQuota(reMonthlyNew, reMonthly, html)
 	// 5h/周占月限额百分比（新版英文文档；旧版无此文案时用默认）
 	pct5, pctW := 20.0, 50.0
-	if m := re5hPct.FindStringSubmatch(html); m != nil {
-		fmt.Sscan(m[1], &pct5)
+	if m := findQuota(re5hPctNew, re5hPct, html); m != "" {
+		fmt.Sscan(m, &pct5)
 	}
-	if m := reWeeklyPct.FindStringSubmatch(html); m != nil {
-		fmt.Sscan(m[1], &pctW)
+	if m := findQuota(reWeeklyPctNew, reWeeklyPct, html); m != "" {
+		fmt.Sscan(m, &pctW)
 	}
 	q := Quota{
 		FiveHourPct: pct5,
@@ -158,13 +194,9 @@ func Parse(html string) (Quota, error) {
 		q.FiveHour = q.Monthly * pct5 / 100
 		q.Weekly = q.Monthly * pctW / 100
 	}
+	// 文档页已不再含每模型限额表，per-model 由 Fetch 从 Console 页合并；
+	// 这里为空时保持为空，由调用方决定是否回退。
 	q.PerModel = perModel
-	if len(q.PerModel) == 0 {
-		if s5 == "" && sW == "" && sM == "" {
-			return Quota{}, fmt.Errorf("parse quota failed: no per-model table and no global limits")
-		}
-		q.PerModel = defaultPerModelQuotas
-	}
 	return q, nil
 }
 
@@ -208,6 +240,40 @@ func parsePerModelQuotas(html string) map[string]float64 {
 		}
 		if mm := reRow.FindStringSubmatch(tr); mm != nil {
 			collect(mm)
+		}
+	}
+	return out
+}
+
+var (
+	// Console Go 页每行：<tr ... data-model="deepseek-v4.1-flash" data-layer="model-row">
+	reConsoleRow = regexp.MustCompile(`(?s)<tr[^>]*data-model="([^"]+)"[^>]*data-layer="model-row".*?</tr>`)
+	// 行内 usage 单元格的 Go 套餐值（$100）；免费模型为 ∞ 不匹配。
+	reConsoleGoUsage = regexp.MustCompile(`(?s)data-allowance-type="usage".*?data-plan="go"[^>]*>.*?data-layer="current-value"[^>]*>\s*\$([0-9]+(?:\.[0-9]+)?)\s*<`)
+)
+
+// parseConsoleModels 解析 https://opencode.ai/console/go 的 SSR 表格，
+// 返回 data-model（官方模型 ID）-> Go 套餐月限额 USD。
+func parseConsoleModels(html string) map[string]float64 {
+	out := map[string]float64{}
+	for _, m := range reConsoleRow.FindAllStringSubmatch(html, -1) {
+		key := normalizeModel(m[1])
+		if key == "" {
+			continue
+		}
+		um := reConsoleGoUsage.FindStringSubmatch(m[0])
+		if um == nil {
+			continue
+		}
+		var usd float64
+		fmt.Sscan(um[1], &usd)
+		if _, exists := out[key]; !exists {
+			out[key] = usd
+		}
+		if alt := digitSepVariant(key); alt != key {
+			if _, exists := out[alt]; !exists {
+				out[alt] = usd
+			}
 		}
 	}
 	return out
